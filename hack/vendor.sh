@@ -59,7 +59,7 @@ clone hg code.google.com/p/gosqlite 74691fb6f837
 
 clone hg code.google.com/p/goauth2 afe77d958c70
 
-clone git github.com/MSOpenTech/azure-sdk-for-go 99078356867da23aa17bcbb0935ea06db9315fc5
+clone git github.com/MSOpenTech/azure-sdk-for-go 8a1a75ea799cf192c545d70d146dc2a66bb332a7
 
 # get Go tip's archive/tar, for xattr support and improved performance
 # TODO after Go 1.4 drops, bump our minimum supported version and drop this vendored dep
