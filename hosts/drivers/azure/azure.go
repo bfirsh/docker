@@ -399,7 +399,7 @@ func createAzureVM(driver *Driver) error {
 		return err
 	}
 
-	vmConfig, err = vmClient.AddAzureLinuxProvisioningConfig(vmConfig, driver.UserName, driver.UserPassword, driver.azureCertPath())
+	vmConfig, err = vmClient.AddAzureLinuxProvisioningConfig(vmConfig, driver.UserName, driver.UserPassword, driver.azureCertPath(), driver.SshPort)
 	if err != nil {
 		return err
 	}
