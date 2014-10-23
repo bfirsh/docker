@@ -65,6 +65,8 @@ clone git github.com/tent/http-link-go ac974c61c2f990f4115b119354b5e0b47550e888
 
 clone hg code.google.com/p/goauth2 afe77d958c70
 
+clone git github.com/mitchellh/go-homedir 7d2d8c8a4e078ce3c58736ab521a40b37a504c52
+
 clone git github.com/MSOpenTech/azure-sdk-for-go 814812a21a49da38c5cc808ec0958277e33c81d3
 
 # get Go tip's archive/tar, for xattr support and improved performance
