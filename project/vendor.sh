@@ -51,6 +51,44 @@ clone hg code.google.com/p/go.net 84a4013f96e0
 
 clone hg code.google.com/p/gosqlite 74691fb6f837
 
+clone git github.com/rackspace/gophercloud v1.0.0
+
+KEEP="pagination"
+
+KEEP="${KEEP} rackspace"
+KEEP="${KEEP} rackspace/identity/v2/tokens"
+KEEP="${KEEP} rackspace/compute/v2/servers"
+KEEP="${KEEP} rackspace/compute/v2/images"
+KEEP="${KEEP} rackspace/compute/v2/flavors"
+KEEP="${KEEP} rackspace/compute/v2/keypairs"
+
+KEEP="${KEEP} openstack"
+KEEP="${KEEP} openstack/utils"
+KEEP="${KEEP} openstack/identity/v2/tokens"
+KEEP="${KEEP} openstack/identity/v2/tenants"
+KEEP="${KEEP} openstack/identity/v3/endpoints"
+KEEP="${KEEP} openstack/identity/v3/services"
+KEEP="${KEEP} openstack/identity/v3/tokens"
+KEEP="${KEEP} openstack/compute/v2/extensions/keypairs"
+KEEP="${KEEP} openstack/compute/v2/extensions/bootfromvolume"
+KEEP="${KEEP} openstack/compute/v2/extensions/diskconfig"
+KEEP="${KEEP} openstack/compute/v2/flavors"
+KEEP="${KEEP} openstack/compute/v2/images"
+KEEP="${KEEP} openstack/compute/v2/servers"
+
+find src/github.com/rackspace/gophercloud/ -type d -print0 | while read -d $'\0' package; do
+	pkgname=${package#src/github.com/rackspace/gophercloud/}
+	if [[ ${pkgname} != "" ]] && [[ ! " ${KEEP} " =~ " ${pkgname} " ]]; then
+		find ${package} -maxdepth 1 -type f -delete
+	fi
+done
+
+clone git github.com/mitchellh/mapstructure 740c764bc6149d3f1806231418adb9f52c11bcbf
+
+clone git github.com/racker/perigee 0c00cb0a026b71034ebc8205263c77dad3577db5
+
+clone git github.com/google/go-querystring 30f7a39f4a218feb5325f3aebc60c32a572a8274
+
 clone git github.com/docker/libtrust 230dfd18c232
 
 clone git github.com/Sirupsen/logrus v0.6.0
