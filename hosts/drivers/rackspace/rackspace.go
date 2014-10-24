@@ -15,11 +15,17 @@ import (
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/utils"
 
+	"github.com/racker/perigee"
 	"github.com/rackspace/gophercloud"
 	osdisk "github.com/rackspace/gophercloud/openstack/compute/v2/extensions/diskconfig"
 	oskey "github.com/rackspace/gophercloud/openstack/compute/v2/extensions/keypairs"
+	osflavors "github.com/rackspace/gophercloud/openstack/compute/v2/flavors"
+	osimages "github.com/rackspace/gophercloud/openstack/compute/v2/images"
 	osservers "github.com/rackspace/gophercloud/openstack/compute/v2/servers"
+	"github.com/rackspace/gophercloud/pagination"
 	"github.com/rackspace/gophercloud/rackspace"
+	"github.com/rackspace/gophercloud/rackspace/compute/v2/flavors"
+	"github.com/rackspace/gophercloud/rackspace/compute/v2/images"
 	"github.com/rackspace/gophercloud/rackspace/compute/v2/keypairs"
 	"github.com/rackspace/gophercloud/rackspace/compute/v2/servers"
 )
@@ -32,6 +38,8 @@ type Driver struct {
 	FlavorID string
 
 	storePath    string
+	imageQuery   string
+	flavorQuery  string
 	KeyPairName  string
 	ServerName   string
 	ServerID     string
@@ -39,12 +47,12 @@ type Driver struct {
 }
 
 type CreateFlags struct {
-	Username   *string
-	APIKey     *string
-	Region     *string
-	ImageID    *string
-	FlavorID   *string
-	ServerName *string
+	Username    *string
+	APIKey      *string
+	Region      *string
+	ImageQuery  *string
+	FlavorQuery *string
+	ServerName  *string
 }
 
 func init() {
@@ -56,6 +64,22 @@ func init() {
 
 func errMissingOption(flagName string) error {
 	return fmt.Errorf("rackspace driver requires the --rackspace-%s option", flagName)
+}
+
+func combineErrors(errs []error) error {
+	switch len(errs) {
+	case 0:
+		return nil
+	case 1:
+		return errs[0]
+	default:
+		messages := make([]string, len(errs))
+		for i, err := range errs {
+			messages[i] = err.Error()
+		}
+		combined := strings.Join(messages, "\n ")
+		return fmt.Errorf("Multiple errors encountered:\n %s", combined)
+	}
 }
 
 func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
@@ -75,15 +99,15 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 			"",
 			"Rackspace region",
 		),
-		ImageID: cmd.String(
+		ImageQuery: cmd.String(
 			[]string{"-rackspace-image"},
 			"",
-			"Rackspace image ID",
+			"Rackspace image ID or name query",
 		),
-		FlavorID: cmd.String(
+		FlavorQuery: cmd.String(
 			[]string{"-rackspace-flavor"},
 			"",
-			"Rackspace flavor ID",
+			"Rackspace flavor ID or name query",
 		),
 		ServerName: cmd.String(
 			[]string{"-rackspace-server-name"},
@@ -106,26 +130,9 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	d.Username = *flags.Username
 	d.APIKey = *flags.APIKey
 	d.Region = *flags.Region
-	d.ImageID = *flags.ImageID
-	d.FlavorID = *flags.FlavorID
+	d.imageQuery = *flags.ImageQuery
+	d.flavorQuery = *flags.FlavorQuery
 	d.ServerName = *flags.ServerName
-
-	// Required options.
-	if d.Username == "" {
-		return errMissingOption("username")
-	}
-	if d.APIKey == "" {
-		return errMissingOption("api-key")
-	}
-	if d.Region == "" {
-		return errMissingOption("region")
-	}
-	if d.ImageID == "" {
-		return errMissingOption("image")
-	}
-	if d.FlavorID == "" {
-		return errMissingOption("flavor")
-	}
 
 	// Options with derived default values.
 	if d.ServerName == "" {
@@ -140,6 +147,10 @@ func (d *Driver) Create() error {
 
 	client, err := d.authenticate()
 	if err != nil {
+		return err
+	}
+
+	if err := d.validateForCreate(client); err != nil {
 		return err
 	}
 
@@ -254,6 +265,10 @@ func (d *Driver) GetSSHCommand(args ...string) *exec.Cmd {
 }
 
 func (d *Driver) authenticate() (*gophercloud.ServiceClient, error) {
+	if err := d.validateForAuth(); err != nil {
+		return nil, err
+	}
+
 	log.Debugf("Authenticating with your Rackspace credentials.")
 
 	ao := gophercloud.AuthOptions{
@@ -274,6 +289,37 @@ func (d *Driver) authenticate() (*gophercloud.ServiceClient, error) {
 	}
 
 	return serviceClient, nil
+}
+
+func (d *Driver) validateForAuth() error {
+	errs := make([]error, 0)
+
+	// Required options.
+	if d.Username == "" {
+		errs = append(errs, errMissingOption("username"))
+	}
+	if d.APIKey == "" {
+		errs = append(errs, errMissingOption("api-key"))
+	}
+	if d.Region == "" {
+		errs = append(errs, errMissingOption("region"))
+	}
+
+	return combineErrors(errs)
+}
+
+func (d *Driver) validateForCreate(client *gophercloud.ServiceClient) error {
+	errs := make([]error, 0)
+
+	if imageErr := d.chooseImage(client); imageErr != nil {
+		errs = append(errs, imageErr)
+	}
+
+	if flavorErr := d.chooseFlavor(client); flavorErr != nil {
+		errs = append(errs, flavorErr)
+	}
+
+	return combineErrors(errs)
 }
 
 func (d *Driver) createSSHKey(client *gophercloud.ServiceClient) error {
@@ -300,6 +346,184 @@ func (d *Driver) createSSHKey(client *gophercloud.ServiceClient) error {
 	d.KeyPairName = k.Name
 
 	return nil
+}
+
+func (d *Driver) chooseImage(client *gophercloud.ServiceClient) error {
+	if d.imageQuery != "" {
+		// First, attempt to interpret the query as an image ID.
+		im, err := images.Get(client, d.imageQuery).Extract()
+		if err == nil {
+			log.Debugf("Image '%s' with id=%s chosen.", im.Name, im.ID)
+			d.ImageID = im.ID
+			return nil
+		}
+
+		if casted, ok := err.(*perigee.UnexpectedResponseCodeError); !ok || casted.Actual != 404 {
+			return err
+		}
+	}
+
+	// List the images available and filter by name.
+	matchingImages := make([]osimages.Image, 0, 5)
+	allImages := make([]osimages.Image, 0, 50)
+	lowerQuery := strings.ToLower(d.imageQuery)
+
+	err := images.ListDetail(client, nil).EachPage(func(page pagination.Page) (bool, error) {
+		is, err := images.ExtractImages(page)
+		if err != nil {
+			return false, err
+		}
+
+		allImages = append(allImages, is...)
+		for _, image := range is {
+
+			if d.imageQuery != "" {
+				lowerName := strings.ToLower(image.Name)
+				if strings.Contains(lowerName, lowerQuery) {
+					matchingImages = append(matchingImages, image)
+				}
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if d.imageQuery == "" {
+		// No image query provided. List all available images.
+		log.Errorf("You must specify an image for your server.")
+		log.Infof("Please choose an image below by providing its ID or name to --rackspace-image:")
+		listImages(allImages)
+		return fmt.Errorf("Missing required parameter --rackspace-image.")
+	}
+
+	switch len(matchingImages) {
+	case 1:
+		// One match! Use that image.
+		match := matchingImages[0]
+		log.Debugf("Image '%s' with id=%s has been chosen.", match.Name, match.ID)
+		d.ImageID = match.ID
+		return nil
+	case 0:
+		// No matches. List all available images.
+		log.Errorf(`Your image query "%s" didn't match any images.`, d.imageQuery)
+		log.Infof("Please choose an image from the following list, by name or by ID.")
+		listImages(allImages)
+		return fmt.Errorf(`"--rackspace-image %s" didn't match any images.`, d.imageQuery)
+	default:
+		// Multiple matches. List all matching images.
+		log.Errorf(`Your image query "%s" matched %d images.`, d.imageQuery, len(matchingImages))
+		log.Infof("These are the choices that matched. Please narrow your search to match only one!")
+		listImages(matchingImages)
+		return fmt.Errorf(`"--rackspace-image %s" was ambiguous.`, d.imageQuery)
+	}
+}
+
+func listImages(slice []osimages.Image) {
+	maxName, maxID := 0, 0
+
+	for _, image := range slice {
+		if len(image.Name) > maxName {
+			maxName = len(image.Name)
+		}
+		if len(image.ID) > maxID {
+			maxID = len(image.ID)
+		}
+	}
+
+	for _, image := range slice {
+		log.Infof(" %[2]*[1]s %-[4]*[3]s", image.ID, maxID, image.Name, maxName)
+	}
+}
+
+func (d *Driver) chooseFlavor(client *gophercloud.ServiceClient) error {
+	if d.flavorQuery != "" {
+		// First, attempt to interpret the query as a flavor ID.
+		fl, err := flavors.Get(client, d.flavorQuery).Extract()
+		if err == nil {
+			log.Debugf("Flavor '%s' with id=%s chosen.", fl.Name, fl.ID)
+			d.FlavorID = fl.ID
+			return nil
+		}
+
+		if casted, ok := err.(*perigee.UnexpectedResponseCodeError); !ok || casted.Actual != 404 {
+			return err
+		}
+	}
+
+	// List the flavors available and filter by name.
+	matchingFlavors := make([]osflavors.Flavor, 0, 5)
+	allFlavors := make([]osflavors.Flavor, 0, 50)
+	lowerQuery := strings.ToLower(d.flavorQuery)
+
+	err := flavors.List(client, nil).EachPage(func(page pagination.Page) (bool, error) {
+		fs, err := flavors.ExtractFlavors(page)
+		if err != nil {
+			return false, err
+		}
+
+		allFlavors = append(allFlavors, fs...)
+		for _, flavor := range fs {
+
+			if d.flavorQuery != "" {
+				lowerName := strings.ToLower(flavor.Name)
+				if strings.Contains(lowerName, lowerQuery) {
+					matchingFlavors = append(matchingFlavors, flavor)
+				}
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if d.flavorQuery == "" {
+		// No flavor query provided. List all available flavors.
+		log.Errorf("You must specify a flavor for your server.")
+		log.Infof("Please choose a flavor below by providing its ID or name to --rackspace-flavor:")
+		listFlavors(allFlavors)
+		return fmt.Errorf("Missing required parameter --rackspace-flavor.")
+	}
+
+	switch len(matchingFlavors) {
+	case 1:
+		// One match! Use that flavor.
+		match := matchingFlavors[0]
+		log.Debugf("Flavor '%s' with id=%s has been chosen.", match.Name, match.ID)
+		d.FlavorID = match.ID
+		return nil
+	case 0:
+		// No matches. List all available flavors.
+		log.Errorf(`Your flavor query "%s" didn't match any flavors.`, d.flavorQuery)
+		log.Infof("Please choose a flavor from the following list, by name or by ID.")
+		listFlavors(allFlavors)
+		return fmt.Errorf(`"--rackspace-flavor %s" didn't match any flavors.`, d.flavorQuery)
+	default:
+		// Multiple matches. List all matching flavors.
+		log.Errorf(`Your image query "%s" matched %d flavors.`, d.flavorQuery, len(matchingFlavors))
+		log.Infof("These are the choices that matched. Please narrow your search to match only one!")
+		listFlavors(matchingFlavors)
+		return fmt.Errorf(`"--rackspace-flavor %s" was ambiguous.`, d.flavorQuery)
+	}
+}
+
+func listFlavors(slice []osflavors.Flavor) {
+	maxName, maxID := 0, 0
+
+	for _, flavor := range slice {
+		if len(flavor.Name) > maxName {
+			maxName = len(flavor.Name)
+		}
+		if len(flavor.ID) > maxID {
+			maxID = len(flavor.ID)
+		}
+	}
+
+	for _, flavor := range slice {
+		log.Infof(" %[2]*[1]s %[4]*[3]s", flavor.ID, maxID, flavor.Name, maxName)
+	}
 }
 
 func (d *Driver) createServer(client *gophercloud.ServiceClient) error {
