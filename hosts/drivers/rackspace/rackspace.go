@@ -25,25 +25,26 @@ import (
 )
 
 type Driver struct {
-	Username    string
-	APIKey      string
-	Region      string
-	ImageID     string
-	FlavorID    string
-	KeyPairName string
+	Username string
+	APIKey   string
+	Region   string
+	ImageID  string
+	FlavorID string
 
 	storePath    string
-	Basename     string
+	KeyPairName  string
+	ServerName   string
 	ServerID     string
 	ServerIPAddr string
 }
 
 type CreateFlags struct {
-	Username *string
-	APIKey   *string
-	Region   *string
-	ImageID  *string
-	FlavorID *string
+	Username   *string
+	APIKey     *string
+	Region     *string
+	ImageID    *string
+	FlavorID   *string
+	ServerName *string
 }
 
 func init() {
@@ -84,6 +85,11 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 			"",
 			"Rackspace flavor ID",
 		),
+		ServerName: cmd.String(
+			[]string{"-rackspace-server-name"},
+			"",
+			"Rackspace server name",
+		),
 	}
 }
 
@@ -102,7 +108,9 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	d.Region = *flags.Region
 	d.ImageID = *flags.ImageID
 	d.FlavorID = *flags.FlavorID
+	d.ServerName = *flags.ServerName
 
+	// Required options.
 	if d.Username == "" {
 		return errMissingOption("username")
 	}
@@ -119,13 +127,16 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 		return errMissingOption("flavor")
 	}
 
+	// Options with derived default values.
+	if d.ServerName == "" {
+		d.ServerName = "docker-host-" + utils.GenerateRandomID()
+	}
+
 	return nil
 }
 
 func (d *Driver) Create() error {
-	d.Basename = utils.GenerateRandomID()
-
-	log.Infof("Creating Rackspace server...")
+	log.Infof("Creating Rackspace server [%s]...", d.ServerName)
 
 	client, err := d.authenticate()
 	if err != nil {
@@ -201,8 +212,7 @@ func (d *Driver) Remove() error {
 		return err
 	}
 
-	log.Debugf("Deleting this server.")
-
+	log.Debugf("Deleting the server.")
 	if err := servers.Delete(client, d.ServerID); err != nil {
 		return err
 	}
@@ -267,7 +277,8 @@ func (d *Driver) authenticate() (*gophercloud.ServiceClient, error) {
 }
 
 func (d *Driver) createSSHKey(client *gophercloud.ServiceClient) error {
-	log.Debugf("Creating a new SSH key.")
+	name := d.ServerName + "-key"
+	log.Debugf("Creating a new SSH key [%s].", name)
 
 	if err := ssh.GenerateSSHKey(d.sshKeyPath()); err != nil {
 		return err
@@ -279,7 +290,7 @@ func (d *Driver) createSSHKey(client *gophercloud.ServiceClient) error {
 	}
 
 	k, err := keypairs.Create(client, oskey.CreateOpts{
-		Name:      "docker-key-" + d.Basename,
+		Name:      name,
 		PublicKey: string(publicKey),
 	}).Extract()
 	if err != nil {
@@ -293,10 +304,9 @@ func (d *Driver) createSSHKey(client *gophercloud.ServiceClient) error {
 
 func (d *Driver) createServer(client *gophercloud.ServiceClient) error {
 	log.Debugf("Launching the server.")
-	name := "docker-host-" + d.Basename
 
 	s, err := servers.Create(client, servers.CreateOpts{
-		Name:       name,
+		Name:       d.ServerName,
 		ImageRef:   d.ImageID,
 		FlavorRef:  d.FlavorID,
 		KeyPair:    d.KeyPairName,
@@ -306,12 +316,12 @@ func (d *Driver) createServer(client *gophercloud.ServiceClient) error {
 		return err
 	}
 
-	log.Debugf("Waiting for server %s to launch.", name)
+	log.Debugf("Waiting for server %s to launch.", d.ServerName)
 	if err = servers.WaitForStatus(client, s.ID, "ACTIVE", 300); err != nil {
 		return err
 	}
 
-	log.Debugf("Getting details for server %s.", name)
+	log.Debugf("Getting details for server %s.", d.ServerName)
 	details, err := servers.Get(client, s.ID).Extract()
 	if err != nil {
 		return err
@@ -319,7 +329,7 @@ func (d *Driver) createServer(client *gophercloud.ServiceClient) error {
 	d.ServerID = details.ID
 	d.ServerIPAddr = details.AccessIPv4
 
-	log.Debugf("Server %s is ready at IP address %s.", name, d.ServerIPAddr)
+	log.Debugf("Server %s is ready at IP address %s.", d.ServerName, d.ServerIPAddr)
 
 	return nil
 }
