@@ -571,6 +571,59 @@ func (d *Driver) createServer(client *gophercloud.ServiceClient) error {
 func (d *Driver) setupDocker() error {
 	log.Debugf("Setting up Docker.")
 
+	if err := ssh.WaitForTCP(fmt.Sprintf("%s:%d", d.ServerIPAddr, 22)); err != nil {
+		return err
+	}
+
+	kinds := map[string]func() []string{
+		"(which apt && which service)":      setupDockerUbuntu,
+		"(which docker && which systemctl)": setupDockerCoreOS,
+	}
+
+	var commands []string
+
+	for probe, installCmdFunc := range kinds {
+		// The &&/|| bit keeps the ssh command from exiting with an unsuccessful status when the
+		// probe fails, which would keep us from being able to tell the difference between
+		// connection problems and a failed probe.
+		probeCmd := fmt.Sprintf(`%s && echo -n "yes" || echo -n "no"`, probe)
+		output, err := d.GetSSHCommand(probeCmd).Output()
+		if err != nil {
+			return err
+		}
+
+		if strings.HasSuffix(string(output), "yes") {
+			commands = installCmdFunc()
+			break
+		}
+	}
+
+	if commands == nil {
+		log.Errorf("I don't know how to set up Docker on this host!")
+		log.Infof(`You'll need to log in with "docker hosts ssh %s" and:`, d.ServerName)
+		log.Infof(" * Install Docker if necessary")
+		log.Infof(" * Configure Docker to listen on all interfaces")
+		return nil
+	}
+
+	for _, command := range commands {
+		if err := d.GetSSHCommand(command).Run(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func setupDockerUbuntu() []string {
+	return []string{
+		`apt-get update -q && apt-get install -y docker.io`,
+		`echo 'export DOCKER_OPTS="--host=tcp://0.0.0.0:2375"' >> /etc/default/docker.io`,
+		`service docker.io restart`,
+	}
+}
+
+func setupDockerCoreOS() []string {
 	const init = `[Unit]
 Description=Docker Socket for the API
 
@@ -589,19 +642,10 @@ WantedBy=sockets.target`
 		`systemctl start docker`,
 	}
 
-	commands := []string{
+	return []string{
 		fmt.Sprintf(`sudo sh -c "echo '%s' > /etc/systemd/system/docker-tcp.socket"`, init),
 		fmt.Sprintf(`sudo sh -c "%s"`, strings.Join(serviceCmds, " && ")),
 	}
-
-	for _, command := range commands {
-		log.Debugf("> %s", command)
-		if err := d.GetSSHCommand(command).Run(); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (d *Driver) sshKeyPath() string {
