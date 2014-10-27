@@ -17,7 +17,6 @@ import (
 
 	"github.com/racker/perigee"
 	"github.com/rackspace/gophercloud"
-	osdisk "github.com/rackspace/gophercloud/openstack/compute/v2/extensions/diskconfig"
 	oskey "github.com/rackspace/gophercloud/openstack/compute/v2/extensions/keypairs"
 	osflavors "github.com/rackspace/gophercloud/openstack/compute/v2/flavors"
 	osimages "github.com/rackspace/gophercloud/openstack/compute/v2/images"
@@ -225,7 +224,7 @@ func (d *Driver) Remove() error {
 	}
 
 	log.Debugf("Deleting the server.")
-	if err := servers.Delete(client, d.ServerID); err != nil {
+	if err := servers.Delete(client, d.ServerID).Extract(); err != nil {
 		return err
 	}
 
@@ -467,7 +466,7 @@ func (d *Driver) chooseFlavor(client *gophercloud.ServiceClient) error {
 	allFlavors := make([]osflavors.Flavor, 0, 50)
 	lowerQuery := strings.ToLower(d.flavorQuery)
 
-	err := flavors.List(client, nil).EachPage(func(page pagination.Page) (bool, error) {
+	err := flavors.ListDetail(client, nil).EachPage(func(page pagination.Page) (bool, error) {
 		fs, err := flavors.ExtractFlavors(page)
 		if err != nil {
 			return false, err
@@ -540,11 +539,10 @@ func (d *Driver) createServer(client *gophercloud.ServiceClient) error {
 	log.Debugf("Launching the server.")
 
 	s, err := servers.Create(client, servers.CreateOpts{
-		Name:       d.ServerName,
-		ImageRef:   d.ImageID,
-		FlavorRef:  d.FlavorID,
-		KeyPair:    d.KeyPairName,
-		DiskConfig: osdisk.Manual,
+		Name:      d.ServerName,
+		ImageRef:  d.ImageID,
+		FlavorRef: d.FlavorID,
+		KeyPair:   d.KeyPairName,
 	}).Extract()
 	if err != nil {
 		return err
@@ -575,13 +573,12 @@ func (d *Driver) setupDocker() error {
 		return err
 	}
 
-	kinds := map[string]func() []string{
-		"(which apt && which service)":      setupDockerUbuntu,
-		"(which docker && which systemctl)": setupDockerCoreOS,
-	}
+	kinds := make(map[string]func() error)
+	kinds["(which apt && which service)"] = func() error { return d.setupDockerUbuntu() }
+	kinds["(which yum)"] = func() error { return d.setupDockerFedora() }
+	kinds["(which docker && which systemctl && which update_engine_client)"] = func() error { return d.setupDockerCoreOS() }
 
-	var commands []string
-
+	installed := false
 	for probe, installCmdFunc := range kinds {
 		// The &&/|| bit keeps the ssh command from exiting with an unsuccessful status when the
 		// probe fails, which would keep us from being able to tell the difference between
@@ -593,37 +590,39 @@ func (d *Driver) setupDocker() error {
 		}
 
 		if strings.HasSuffix(string(output), "yes") {
-			commands = installCmdFunc()
+			if err := installCmdFunc(); err != nil {
+				return err
+			}
+			installed = true
 			break
 		}
 	}
 
-	if commands == nil {
+	if !installed {
 		log.Errorf("I don't know how to set up Docker on this host!")
 		log.Infof(`You'll need to log in with "docker hosts ssh %s" and:`, d.ServerName)
 		log.Infof(" * Install Docker if necessary")
 		log.Infof(" * Configure Docker to listen on all interfaces")
-		return nil
-	}
-
-	for _, command := range commands {
-		if err := d.GetSSHCommand(command).Run(); err != nil {
-			return err
-		}
 	}
 
 	return nil
 }
 
-func setupDockerUbuntu() []string {
-	return []string{
-		`apt-get update -q && apt-get install -y docker.io`,
-		`echo 'export DOCKER_OPTS="--host=tcp://0.0.0.0:2375"' >> /etc/default/docker.io`,
-		`service docker.io restart`,
-	}
+func (d *Driver) setupDockerUbuntu() error {
+	return d.sshAll([]string{
+		`curl -sSL https://get.docker.com/ | sh`,
+		`echo 'export DOCKER_OPTS="--host=tcp://0.0.0.0:2375"' >> /etc/default/docker`,
+		`service docker restart`,
+	})
 }
 
-func setupDockerCoreOS() []string {
+func (d *Driver) setupDockerFedora() error {
+	return d.sshAll([]string{
+		`curl -sSL https://get.docker.com | sh`,
+	})
+}
+
+func (d *Driver) setupDockerCoreOS() error {
 	const init = `[Unit]
 Description=Docker Socket for the API
 
@@ -635,6 +634,13 @@ Service=docker.service
 [Install]
 WantedBy=sockets.target`
 
+	// Ignore the error here because it boots us from ssh.
+	d.sshAll([]string{"update_engine_client -update"})
+
+	if err := ssh.WaitForTCP(fmt.Sprintf("%s:%d", d.ServerIPAddr, 22)); err != nil {
+		return err
+	}
+
 	serviceCmds := []string{
 		`systemctl enable docker-tcp.socket`,
 		`systemctl stop docker`,
@@ -642,10 +648,20 @@ WantedBy=sockets.target`
 		`systemctl start docker`,
 	}
 
-	return []string{
+	return d.sshAll([]string{
 		fmt.Sprintf(`sudo sh -c "echo '%s' > /etc/systemd/system/docker-tcp.socket"`, init),
 		fmt.Sprintf(`sudo sh -c "%s"`, strings.Join(serviceCmds, " && ")),
+	})
+}
+
+func (d *Driver) sshAll(commands []string) error {
+	for _, command := range commands {
+		if err := d.GetSSHCommand(command).Run(); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 func (d *Driver) sshKeyPath() string {
