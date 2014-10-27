@@ -37,13 +37,14 @@ type Driver struct {
 	ImageID  string
 	FlavorID string
 
-	storePath    string
-	imageQuery   string
-	flavorQuery  string
-	KeyPairName  string
-	ServerName   string
-	ServerID     string
-	ServerIPAddr string
+	storePath      string
+	imageQuery     string
+	flavorQuery    string
+	KeyPairName    string
+	ServerName     string
+	ServerID       string
+	ServerIPAddr   string
+	ServerUsername string
 }
 
 type CreateFlags struct {
@@ -261,7 +262,7 @@ func (d *Driver) Kill() error {
 }
 
 func (d *Driver) GetSSHCommand(args ...string) *exec.Cmd {
-	return ssh.GetSSHCommand(d.ServerIPAddr, 22, "core", d.sshKeyPath(), args...)
+	return ssh.GetSSHCommand(d.ServerIPAddr, 22, d.ServerUsername, d.sshKeyPath(), args...)
 }
 
 func (d *Driver) authenticate() (*gophercloud.ServiceClient, error) {
@@ -349,12 +350,22 @@ func (d *Driver) createSSHKey(client *gophercloud.ServiceClient) error {
 }
 
 func (d *Driver) chooseImage(client *gophercloud.ServiceClient) error {
+	setImage := func(im *osimages.Image) {
+		log.Debugf("Image '%s' with id=%s chosen.", im.Name, im.ID)
+		d.ImageID = im.ID
+		if d.ServerUsername == "" && strings.Contains(strings.ToLower(im.Name), "coreos") {
+			log.Debugf("")
+			d.ServerUsername = "core"
+		} else {
+			d.ServerUsername = "root"
+		}
+	}
+
 	if d.imageQuery != "" {
 		// First, attempt to interpret the query as an image ID.
 		im, err := images.Get(client, d.imageQuery).Extract()
 		if err == nil {
-			log.Debugf("Image '%s' with id=%s chosen.", im.Name, im.ID)
-			d.ImageID = im.ID
+			setImage(im)
 			return nil
 		}
 
@@ -402,8 +413,7 @@ func (d *Driver) chooseImage(client *gophercloud.ServiceClient) error {
 	case 1:
 		// One match! Use that image.
 		match := matchingImages[0]
-		log.Debugf("Image '%s' with id=%s has been chosen.", match.Name, match.ID)
-		d.ImageID = match.ID
+		setImage(&match)
 		return nil
 	case 0:
 		// No matches. List all available images.
