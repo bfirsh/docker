@@ -575,7 +575,7 @@ func (d *Driver) setupDocker() error {
 
 	kinds := make(map[string]func() error)
 	kinds["(which apt && which service)"] = func() error { return d.setupDockerUbuntu() }
-	kinds["(which yum)"] = func() error { return d.setupDockerFedora() }
+	kinds["(yum --help)"] = func() error { return d.setupDockerFedora() }
 	kinds["(which docker && which systemctl && which update_engine_client)"] = func() error { return d.setupDockerCoreOS() }
 
 	installed := false
@@ -608,22 +608,7 @@ func (d *Driver) setupDocker() error {
 	return nil
 }
 
-func (d *Driver) setupDockerUbuntu() error {
-	return d.sshAll([]string{
-		`curl -sSL https://get.docker.com/ | sh`,
-		`echo 'export DOCKER_OPTS="--host=tcp://0.0.0.0:2375"' >> /etc/default/docker`,
-		`service docker restart`,
-	})
-}
-
-func (d *Driver) setupDockerFedora() error {
-	return d.sshAll([]string{
-		`curl -sSL https://get.docker.com | sh`,
-	})
-}
-
-func (d *Driver) setupDockerCoreOS() error {
-	const init = `[Unit]
+const systemdInit = `[Unit]
 Description=Docker Socket for the API
 
 [Socket]
@@ -634,6 +619,33 @@ Service=docker.service
 [Install]
 WantedBy=sockets.target`
 
+func (d *Driver) setupDockerUbuntu() error {
+	return d.sshAll([]string{
+		`curl -sSL https://get.docker.com/ | sh`,
+		`echo 'export DOCKER_OPTS="--host=tcp://0.0.0.0:2375"' >> /etc/default/docker`,
+		`service docker restart`,
+	})
+}
+
+func (d *Driver) setupDockerFedora() error {
+	serviceCmds := []string{
+		`systemctl enable docker.socket`,
+		`systemctl stop docker`,
+		`systemctl start docker.socket`,
+		`systemctl start docker`,
+	}
+
+	return d.sshAll([]string{
+		`curl -sSL https://get.docker.com | sh`,
+		fmt.Sprintf(`echo '%s' > /usr/lib/systemd/system/docker.socket`, systemdInit),
+		`setsebool -P docker_connect_any 1`,
+		`firewall-cmd --zone=public --add-port=2375/tcp`,
+		`firewall-cmd --permanent --zone=public --add-port=2375/tcp`,
+		strings.Join(serviceCmds, " && "),
+	})
+}
+
+func (d *Driver) setupDockerCoreOS() error {
 	// Ignore the error here because it boots us from ssh.
 	d.sshAll([]string{"update_engine_client -update"})
 
@@ -649,7 +661,7 @@ WantedBy=sockets.target`
 	}
 
 	return d.sshAll([]string{
-		fmt.Sprintf(`sudo sh -c "echo '%s' > /etc/systemd/system/docker-tcp.socket"`, init),
+		fmt.Sprintf(`sudo sh -c "echo '%s' > /etc/systemd/system/docker-tcp.socket"`, systemdInit),
 		fmt.Sprintf(`sudo sh -c "%s"`, strings.Join(serviceCmds, " && ")),
 	})
 }
