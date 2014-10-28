@@ -101,13 +101,13 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 		),
 		ImageQuery: cmd.String(
 			[]string{"-rackspace-image"},
-			"",
-			"Rackspace image ID or name query",
+			"325a1c78-78e1-4367-be7a-1334b088018a",
+			"Rackspace image ID or name query. Default: CoreOS (alpha)",
 		),
 		FlavorQuery: cmd.String(
 			[]string{"-rackspace-flavor"},
-			"",
-			"Rackspace flavor ID or name query",
+			"performance1-1",
+			"Rackspace flavor ID or name query. Default: 1GB Performance",
 		),
 		ServerName: cmd.String(
 			[]string{"-rackspace-server-name"},
