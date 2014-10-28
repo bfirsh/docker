@@ -600,7 +600,7 @@ func (d *Driver) setupDocker() error {
 
 	if !installed {
 		log.Errorf("I don't know how to set up Docker on this host!")
-		log.Infof(`You'll need to log in with "docker hosts ssh %s" and:`, d.ServerName)
+		log.Infof(`You'll need to log in with "docker hosts ssh" and:`)
 		log.Infof(" * Install Docker if necessary")
 		log.Infof(" * Configure Docker to listen on all interfaces")
 	}
