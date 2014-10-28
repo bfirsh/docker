@@ -224,12 +224,12 @@ func (d *Driver) Remove() error {
 	}
 
 	log.Debugf("Deleting the server.")
-	if err := servers.Delete(client, d.ServerID).Extract(); err != nil {
+	if err := servers.Delete(client, d.ServerID).ExtractErr(); err != nil {
 		return err
 	}
 
 	log.Debugf("Deleting the ssh keypair.")
-	if err := keypairs.Delete(client, d.KeyPairName).Extract(); err != nil {
+	if err := keypairs.Delete(client, d.KeyPairName).ExtractErr(); err != nil {
 		return err
 	}
 
@@ -244,7 +244,7 @@ func (d *Driver) Restart() error {
 
 	log.Debugf("Restarting the server.")
 
-	if err := servers.Reboot(client, d.ServerID, osservers.SoftReboot).Extract(); err != nil {
+	if err := servers.Reboot(client, d.ServerID, osservers.SoftReboot).ExtractErr(); err != nil {
 		return err
 	}
 
