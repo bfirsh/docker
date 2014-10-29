@@ -179,12 +179,16 @@ func (d *Driver) GetIP() (string, error) {
 func (d *Driver) GetURL() (string, error) {
 	ip, err := d.GetIP()
 	if err != nil {
-		return "", err
+		return "", nil
 	}
 	return fmt.Sprintf("tcp://%s:2375", ip), nil
 }
 
 func (d *Driver) GetState() (state.State, error) {
+	if d.ServerID == "" {
+		return state.None, nil
+	}
+
 	client, err := d.authenticate()
 	if err != nil {
 		return state.None, err
@@ -218,6 +222,11 @@ func (d *Driver) Stop() error {
 }
 
 func (d *Driver) Remove() error {
+	if d.ServerID == "" {
+		// Server was not created completely.
+		return nil
+	}
+
 	client, err := d.authenticate()
 	if err != nil {
 		return err
@@ -578,7 +587,9 @@ func (d *Driver) setupDocker() error {
 	kinds["(yum --help)"] = func() error { return d.setupDockerFedora() }
 	kinds["(which docker && which systemctl && which update_engine_client)"] = func() error { return d.setupDockerCoreOS() }
 
+	var buildErr error
 	installed := false
+
 	for probe, installCmdFunc := range kinds {
 		// The &&/|| bit keeps the ssh command from exiting with an unsuccessful status when the
 		// probe fails, which would keep us from being able to tell the difference between
@@ -586,20 +597,30 @@ func (d *Driver) setupDocker() error {
 		probeCmd := fmt.Sprintf(`%s && echo -n "yes" || echo -n "no"`, probe)
 		output, err := d.GetSSHCommand(probeCmd).Output()
 		if err != nil {
-			return err
+			buildErr = err
+			break
 		}
 
 		if strings.HasSuffix(string(output), "yes") {
 			if err := installCmdFunc(); err != nil {
-				return err
+				buildErr = err
+			} else {
+				installed = true
 			}
-			installed = true
 			break
 		}
 	}
 
+	if buildErr != nil {
+		log.Errorf("Something broke while I was setting up Docker on this host!")
+		log.Errorf("Details: %v", buildErr)
+	}
+
 	if !installed {
 		log.Errorf("I don't know how to set up Docker on this host!")
+	}
+
+	if buildErr != nil || !installed {
 		log.Infof(`You'll need to log in with "docker hosts ssh" and:`)
 		log.Infof(" * Install Docker if necessary")
 		log.Infof(" * Configure Docker to listen on all interfaces")
