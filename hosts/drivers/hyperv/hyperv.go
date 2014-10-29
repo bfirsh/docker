@@ -14,20 +14,22 @@ import (
 	"github.com/docker/docker/hosts/ssh"
 	"github.com/docker/docker/hosts/state"
 	"github.com/docker/docker/pkg/log"
-	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/utils"
+	flag "github.com/docker/docker/pkg/mflag"
 )
 
 type Driver struct {
 	storePath      string
 	Boot2DockerURL string
 	Boot2DockerLoc string
+	VSwitch        string
 	MachineName    string
 }
 
 type CreateFlags struct {
 	Boot2DockerURL *string
 	Boot2DockerLoc *string
+	VSwitch        *string
 }
 
 func init() {
@@ -43,6 +45,7 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 	createFlags := new(CreateFlags)
 	createFlags.Boot2DockerURL = cmd.String([]string{"-hyperv-boot2docker-url"}, "", "The URL of the boot2docker image. Defaults to the latest available version")
 	createFlags.Boot2DockerLoc = cmd.String([]string{"-hyperv-boot2docker-location"}, "", "Local boot2docker iso.")
+	createFlags.VSwitch = cmd.String([]string{"-hyperv-virtual-switch"}, "", "Name of virtual switch. Defaults to first found.")
 	return createFlags
 }
 
@@ -62,7 +65,7 @@ func (d *Driver) GetURL() (string, error) {
 	if ip == "" {
 		return "", nil
 	}
-	return fmt.Sprintf("tcp://%s:2375", ip), nil
+	return fmt.Sprintf("tcp://%s:2376", ip), nil
 }
 
 func (d *Driver) GetState() (state.State, error) {
@@ -110,6 +113,10 @@ func copyFile(inFile, outFile string) error {
 }
 
 func (d *Driver) Create() error {
+	err := hypervAvailable()
+	if err != nil {
+		return err
+	}
 
 	d.setMachineNameIfNotSet()
 
@@ -134,7 +141,6 @@ func (d *Driver) Create() error {
 	} else {
 		copyFile(d.Boot2DockerLoc, path.Join(d.storePath, "boot2docker.iso"))
 	}
-	
 
 	log.Infof("Creating SSH key...")
 
@@ -142,25 +148,77 @@ func (d *Driver) Create() error {
 		return err
 	}
 
+	log.Infof("Creating  VM...")
+
+	//Get which virtual switch to use from the user
+	virtualSwitch, err := d.chooseVirtualSwitch()
+	if err != nil {
+		return err
+	}
+
+	//hardcoded to 1G at the moment
+	memorySizeInBytes := fmt.Sprintf("%d", (1024 * 1024 * 1024))
+
+	log.Infof("Creating a new Virtual Machine")
+	command := []string{
+		"New-VM",
+		"-Name", "'" + d.MachineName + "'",
+		"-Path", "'" + d.storePath + "'",
+		"-MemoryStartupBytes", memorySizeInBytes}
+	_, err = execute(command)
+	if err != nil {
+		return err
+	}
+
+	command = []string{
+		"Set-VMDvdDrive",
+		"-VMName", "'" + d.MachineName + "'",
+		"-Path", "'" + path.Join(d.storePath, "boot2docker.iso") + "'"}
+	_, err = execute(command)
+	if err != nil {
+		return err
+	}
+
+	command = []string{
+		"Connect-VMNetworkAdapter",
+		"-VMName", "'" + d.MachineName + "'",
+		"-SwitchName", "'" + virtualSwitch + "'"}
+	_, err = execute(command)
+	if err != nil {
+		return err
+	}
+
 	log.Infof("Starting  VM...")
-
-	createVM(path.Join(d.storePath, "boot2docker.iso"), d.MachineName, d.storePath)
-
 	return d.Start()
+}
+
+func (d *Driver) chooseVirtualSwitch() (string, error) {
+	if d.VSwitch != "" {
+		return d.VSwitch, nil
+	}
+	command := []string{
+		"@(Get-VMSwitch).Name"}
+	stdout, err := execute(command)
+	if err != nil {
+		return "", err
+	}
+	switches := parseStdout(stdout)
+	if len(switches) > 0 {
+		log.Infof("Using switch %s", switches[0])
+		return switches[0], nil
+	}
+	return "", fmt.Errorf("no vswitch found")
 }
 
 func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	flags := flagsInterface.(*CreateFlags)
 	d.Boot2DockerURL = *flags.Boot2DockerURL
 	d.Boot2DockerLoc = *flags.Boot2DockerLoc
+	d.VSwitch = *flags.VSwitch
 	return nil
 }
 
-func (d *Driver) Start() error {
-	err := startInstance(d.MachineName)
-	if err != nil {
-		return err
-	}
+func (d *Driver) wait() error {
 	log.Infof("Waiting for host to start...")
 	for {
 		ip, _ := d.GetIP()
@@ -174,8 +232,25 @@ func (d *Driver) Start() error {
 	return ssh.WaitForTCP(fmt.Sprintf("%s:22", ip))
 }
 
+func (d *Driver) Start() error {
+	command := []string{
+		"Start-VM",
+		"-Name", "'" + d.MachineName + "'"}
+	_, err := execute(command)
+	if err != nil {
+		return err
+	}
+	return d.wait()
+}
+
 func (d *Driver) Stop() error {
-	stopMachine(d.MachineName)
+	command := []string{
+		"Stop-VM",
+		"-Name", "'" + d.MachineName + "'"}
+	_, err := execute(command)
+	if err != nil {
+		return err
+	}
 	for {
 		s, err := d.GetState()
 		if err != nil {
@@ -203,17 +278,25 @@ func (d *Driver) Remove() error {
 	command := []string{
 		"Remove-VM",
 		"-Name", "'" + d.MachineName + "'",
-	        "-Force"}
+		"-Force"}
 	_, err = execute(command)
 	return err
 }
 
 func (d *Driver) Restart() error {
-	return restartMachine(d.MachineName)
+	command := []string{
+		"Restart-VM",
+		"-Name", "'" + d.MachineName + "'",
+		"-Force"}
+	_, err := execute(command)
+	if err != nil {
+		return err
+	}
+	return d.wait()
 }
 
 func (d *Driver) Kill() error {
-	return turnOffMachine(d.MachineName)
+	return d.Stop()
 }
 
 func (d *Driver) setMachineNameIfNotSet() {
@@ -223,7 +306,6 @@ func (d *Driver) setMachineNameIfNotSet() {
 }
 
 func (d *Driver) GetIP() (string, error) {
-
 	command := []string{
 		"((",
 		"Get-VM",
