@@ -20,6 +20,7 @@ import (
 	//"github.com/rackspace/gophercloud/openstack/compute/v2/flavors"
         //"github.com/rackspace/gophercloud/openstack/compute/v2/images"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/servers"
+	"github.com/rackspace/gophercloud/openstack/networking/v2/extensions/ports"
 	"github.com/rackspace/gophercloud/openstack/networking/v2/extensions/layer3/floatingips"
 	"github.com/rackspace/gophercloud/openstack/networking/v2/extensions/security/rules"
 )
@@ -112,11 +113,6 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 		"public",
 		"Openstack Floating IP Network UUID",
 	)
-	createFlags.FloatingIpPort = cmd.String(
-		[]string{"-openstack-floating-port"},
-		"",
-		"Openstack Floating IP Network UUID",
-	)
 	createFlags.SecurityGroup = cmd.String(
 		[]string{"-openstack-security-group"},
 		"default",
@@ -148,7 +144,6 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	d.TenantID = *flags.TenantID
 	d.Flavor = *flags.Flavor
 	d.FloatingIpNetwork = *flags.FloatingIpNetwork
-	d.FloatingIpPort = *flags.FloatingIpPort
 	d.SecurityGroup = *flags.SecurityGroup
 	d.NovaNetwork = *flags.NovaNetwork
 	
@@ -191,9 +186,6 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
     } else {
     	if d.FloatingIpNetwork == "" {
 			return fmt.Errorf("openstack driver requires the --openstack-floating-net option")
-		}
-    	if d.FloatingIpPort == "" {
-			return fmt.Errorf("openstack driver requires the --openstack-floating-port option")
 		}
     }
     
@@ -290,9 +282,15 @@ func (d *Driver) Create() error {
     	//TODO Use Neutron Network related Commands
     	netClient := d.getNetworkClient()
     	
+    	//TODO!!
+    	ip := g.getIpFromVmId(s.ID, vmname)
+    	if ip == nil { log.Infof("Couldn't Find IPAddress") }
+    	portID := d.getPorIDtFromIp(ip, d.TenantID)
+    	if portID == nil { log.Infof("Couldn't Find Port") }
+    	
     	ipBuildOpts := floatingips.CreateOpts{
-	    		FloatingNetworkID:  d.FloatingIpNetwork,
-			FloatingIP:          d.FloatingIpPort,
+	    	FloatingNetworkID:  d.FloatingIpNetwork,
+			PortID:             portID,
     		}
     	
     	ip, ipErr := floatingips.Create(netClient, ipBuildOpts).Extract()
@@ -312,6 +310,55 @@ func (d *Driver) Create() error {
 
    return nil
 }
+
+func (d *Driver) getIpFromVmId(id string, name string) (string, error) {
+	opts := servers.ListOpts{Name: vmname}
+	pager := servers.List(client, opts)
+	
+	var ip string := nil
+	log.Debugf("Looking for ", id, "'s ip"
+	pErr := spager.EachPage(func(page pagination.Page) (bool, error) {
+       serverList, err := servers.ExtractServers(page)
+       fmt.Println("Err:" , err)
+          for _, s := range serverList {
+                fmt.Println(s)
+                // We can get status this way!!
+                // s.Status
+                ip := s.AccessIPv4
+                return ip, nil
+          }
+          return true, nil
+        })
+        fmt.Println("Paging Err:" , pErr)
+
+    return "", nil
+}
+
+func (d *Driver) getPortIdFromIp(ip string, tenantId string) (string, error) {
+	opts := ports.ListOpts{TeantID: tenantId}
+	pager := ports.List(client, opts)
+	
+	var portId string := nil
+	
+	pErr := spager.EachPage(func(page pagination.Page) (bool, error) {
+       portList, err := servers.ExtractServers(page)
+       fmt.Println("Err:" , err)
+          for _, p := range portList {
+                fmt.Println(p)
+                ipAddresses := p.FixedIPs
+                for _, ipAdd := range ipAddresses {
+                	if ipAdd.IPAddress == ip {
+                		portId = p.ID
+                		return portId , nil
+                	}
+                }
+          }
+          return true, nil
+        })
+        fmt.Println("Paging Err:" , pErr)
+    return "", nil
+}
+
 
 func (d *Driver) GetURL() (string, error) {
 	ip, err := d.GetIP()
