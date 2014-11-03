@@ -17,10 +17,11 @@ import (
 	"github.com/docker/docker/utils"
 	gophercloud "github.com/rackspace/gophercloud"
 	"github.com/rackspace/gophercloud/openstack"
+	"github.com/rackspace/gophercloud/pagination"
 	//"github.com/rackspace/gophercloud/openstack/compute/v2/flavors"
         //"github.com/rackspace/gophercloud/openstack/compute/v2/images"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/servers"
-	"github.com/rackspace/gophercloud/openstack/networking/v2/extensions/ports"
+	"github.com/rackspace/gophercloud/openstack/networking/v2/ports"
 	"github.com/rackspace/gophercloud/openstack/networking/v2/extensions/layer3/floatingips"
 	"github.com/rackspace/gophercloud/openstack/networking/v2/extensions/security/rules"
 )
@@ -43,8 +44,10 @@ type Driver struct {
 	Flavor        	  string
 	FloatingIpNetwork string
 	FloatingIpPort	  string
+        NetworkID	  string
 	SecurityGroup     string
 	NovaNetwork	  bool
+	NameServer	  string
 	storePath   	  string
 }
 
@@ -55,11 +58,14 @@ type CreateFlags struct {
 	Password      	  *string
 	ImageID		  *string
 	TenantID	  *string
+        RegionName	  *string
 	Flavor       	  *string
 	FloatingIpNetwork *string
 	FloatingIpPort	  *string
+	NetworkID	  *string
 	SecurityGroup	  *string
 	NovaNetwork	  *bool
+	NameServer	  *string
 }
 
 func init() {
@@ -98,6 +104,11 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 		"",
 		"Openstack Tenant UUID",
 	)
+        createFlags.RegionName = cmd.String(
+                []string{"-openstack-region-name"},
+                "RegionOne",
+                "Openstack Region",
+        )
 	createFlags.ImageID = cmd.String(
 		[]string{"-openstack-image-id"},
 		"",
@@ -113,16 +124,26 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 		"public",
 		"Openstack Floating IP Network UUID",
 	)
+        createFlags.NetworkID = cmd.String(
+                []string{"-openstack-net-id"},
+                "",
+                "Openstack Network UUID",
+       ) 
 	createFlags.SecurityGroup = cmd.String(
-		[]string{"-openstack-security-group"},
-		"default",
-		"Openstack Flavor Setting",
+		[]string{"-openstack-secgroup-id"},
+		"",
+		"Openstack Security Group Setting",
 	)
 	createFlags.NovaNetwork = cmd.Bool(
 		[]string{"-openstack-nova-net"},
 		false,
 		"Using Openstack Nova Network?",
 	)
+        createFlags.NameServer = cmd.String(
+                []string{"-openstack-nameserver"},
+                "",
+                "Using Seperate Openstack NameServer",
+        )
 	return createFlags
 }	
 
@@ -142,10 +163,13 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	d.Password = *flags.Password
 	d.ImageID =  *flags.ImageID
 	d.TenantID = *flags.TenantID
+        d.RegionName = *flags.RegionName
 	d.Flavor = *flags.Flavor
 	d.FloatingIpNetwork = *flags.FloatingIpNetwork
+	d.NetworkID = *flags.NetworkID
 	d.SecurityGroup = *flags.SecurityGroup
 	d.NovaNetwork = *flags.NovaNetwork
+	d.NameServer = *flags.NameServer
 	
 	// *Fixme, think about adding the function
 	// pts, err := openstack.AuthOptionsFromEnv()
@@ -177,45 +201,62 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	if d.TenantID == "" {
 		return fmt.Errorf("openstack driver requires the --openstack-tenant-id option")
 	}
+        if d.SecurityGroup == "" {
+                return fmt.Errorf("openstack driver requires the --openstack-secgroup-id option")
+        }
 	// Flavor is defaulted to m1.small
 	// FloatingIpNetwork defaulted to public
-	// SecurityGroup defaulted to defualt
-    // NovaNetwork defaulted to false
-    if d.NovaNetwork {
-    	log.Infof("Using Nova Network Config")
-    } else {
-    	if d.FloatingIpNetwork == "" {
-			return fmt.Errorf("openstack driver requires the --openstack-floating-net option")
-		}
-    }
+        // NovaNetwork defaulted to false
+        if d.NovaNetwork {
+        	log.Infof("Using Nova Network Config")
+        } else {
+        	if d.FloatingIpNetwork == "" {
+	   		return fmt.Errorf("openstack driver requires the --openstack-floating-net option")
+	  	}
+                if d.NetworkID == "" {
+                        return fmt.Errorf("openstack driver requires the --openstack-net-id option")
+                }
+        }
     
 	return nil
 }
 
 func (d *Driver) Create() error {
 	d.setOpenstackVMName()
-	
 	//Get SSH key from flags, or create one.
 	//FixMe, OpenstackAPIs v2 don't let you specify the
 	//ssh key!!? running cloud-init scripts instead
 	//Load User Data for docker installation OR wait for SSH, 
 	//run commands through SSH (digitalocean #156)
-	cloudInitData := []byte(""+
-	"#!/bin/bash\n"+
-	"sudo echo -e 'docker\ndocker' | passwd root\n" +
-	"sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 36A1D7869245C8950F966E92D8576A8BA88D21E9\n"+
-	"sudo sh -c 'echo deb https://get.docker.com/ubuntu docker main > /etc/apt/sources.list.d/docker.list'\n" +
-	"sudo apt-get update\n" +
-	"sudo apt-get install lxc-docker\n" +
-	"sudo service lxc-docker stop\n" +
-	"sudo service ufw stop\n" +
-	"sudo docker -d -H tcp://0.0.0.0:2375 &\n")
-	
+        var cloudInitData []byte
+        if d.NameServer == "" {
+	  cloudInitData = []byte(""+
+	  "#!/bin/bash\n"+
+	  "sudo echo -e 'docker\ndocker' | passwd root\n" +
+	  "sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 36A1D7869245C8950F966E92D8576A8BA88D21E9\n"+
+	  "sudo sh -c 'echo deb https://get.docker.com/ubuntu docker main > /etc/apt/sources.list.d/docker.list'\n" +
+	  "sudo apt-get update\n" +
+	  "sudo apt-get -y install lxc-docker\n" +
+	  "sudo service docker stop\n" +
+	  "sudo service ufw stop\n" +
+	  "sudo docker -d -H tcp://0.0.0.0:2375 &\n")
+	} else {
+          cloudInitData = []byte(""+
+          "#!/bin/bash\n"+
+          "sudo echo -e 'docker\ndocker' | passwd root\n" +
+          "sudo echo 'nameserver '" +d.NameServer+" > /etc/resolv.conf\n"+
+          "sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 36A1D7869245C8950F966E92D8576A8BA88D21E9\n"+
+          "sudo sh -c 'echo deb https://get.docker.com/ubuntu docker main > /etc/apt/sources.list.d/docker.list'\n" +
+          "sudo apt-get update\n" +
+          "sudo apt-get -y install lxc-docker\n" +
+          "sudo service docker stop\n" +
+          "sudo service ufw stop\n" +
+          "sudo docker -d -H tcp://0.0.0.0:2375 &\n")
+        }
 	/* Connect to Endpoint
 	   Authenticate
 	   Get compute client */
 	client := d.getClient()
-	
 	// TODO *FixMe Verify image, flavor,  exists
 	// just letting it pass through un checked right now
 	
@@ -229,11 +270,21 @@ func (d *Driver) Create() error {
 		Name:       vmname,
 		ImageRef:   imageRef,
 		FlavorRef:  flavorRef,
-		//KeyPair: keypair,
+		//KeyPair:  keypair,
 		UserData:   userData,
 	}
+        if !d.NovaNetwork {
+           var network servers.Network
+           network.UUID = d.NetworkID
+           var networks []servers.Network
+           networks = append(networks, network)
+           buildOpts.Networks = networks
+        }
 	//create the server
   	s, sErr := servers.Create(client, buildOpts).Extract()
+        if sErr != nil {
+           log.Infof("Error Creating Server", sErr)
+        }
 	log.Debugf("Err:", sErr)
 	log.Infof("Creating server.")
 
@@ -283,80 +334,104 @@ func (d *Driver) Create() error {
     	netClient := d.getNetworkClient()
     	
     	//TODO!!
-    	ip := g.getIpFromVmId(s.ID, vmname)
-    	if ip == nil { log.Infof("Couldn't Find IPAddress") }
-    	portID := d.getPorIDtFromIp(ip, d.TenantID)
-    	if portID == nil { log.Infof("Couldn't Find Port") }
+    	ip, err := d.getIpFromVmId(s.ID, vmname)
+    	if err != nil { log.Infof("Couldn't Find IPAddress") }
+    	portID, portErr := d.getPortIdFromIp(ip, d.TenantID)
+    	if portErr != nil { log.Infof("Couldn't Find Port") }
     	
     	ipBuildOpts := floatingips.CreateOpts{
-	    	FloatingNetworkID:  d.FloatingIpNetwork,
+	    		FloatingNetworkID:  d.FloatingIpNetwork,
 			PortID:             portID,
     		}
     	
-    	ip, ipErr := floatingips.Create(netClient, ipBuildOpts).Extract()
+    	fip, ipErr := floatingips.Create(netClient, ipBuildOpts).Extract()
     	if ipErr != nil {
 		    log.Debugf("Err:", ipErr)
 	 	    return ipErr
 	    }
-		log.Infof("Created Floating Ip",  ip.FloatingIP)
-		d.IPAddress = ip.FloatingIP
+		log.Infof("Created Floating Ip",  fip.FloatingIP)
+		d.IPAddress = fip.FloatingIP
    	}
 	
 	//set rules on security group for Docker Port, SSH, ICMP
 	secErr := d.setSecurityGroups()
 	if secErr != nil {
-		log.Infof("Error Setting up Security Group Ruless")
+		log.Infof("Error Setting up Security Group Rules")
 	}
 
    return nil
 }
 
+//**
+//FixMe (Clean this up and make sure it works against other Openstack Neutron Instances)
+//**
 func (d *Driver) getIpFromVmId(id string, name string) (string, error) {
-	opts := servers.ListOpts{Name: vmname}
+        client := d.getClient()
+	opts := servers.ListOpts{Name: name}
 	pager := servers.List(client, opts)
 	
-	var ip string := nil
-	log.Debugf("Looking for ", id, "'s ip"
-	pErr := spager.EachPage(func(page pagination.Page) (bool, error) {
-       serverList, err := servers.ExtractServers(page)
-       fmt.Println("Err:" , err)
+	var ip string = ""
+	log.Debugf("Looking for ", id, "'s ip")
+	pErr := pager.EachPage(func(page pagination.Page) (bool, error) {
+        serverList, err := servers.ExtractServers(page)
+        log.Debugf("Err:" , err)
           for _, s := range serverList {
-                fmt.Println(s)
                 // We can get status this way!!
                 // s.Status
-                ip := s.AccessIPv4
-                return ip, nil
+                addresses := s.Addresses
+		for _, ipAdd := range addresses {
+                        ipAddMap := ipAdd.([]interface{})
+                	for k, v := range ipAddMap {
+                          log.Debugf("KEY: ", k, "VALUE: ", v)
+                          switch vv := v.(type) {
+                          case string:
+     				log.Debugf("String... Pass")
+   			  case map[string]interface{}:
+        		   	log.Debugf("Is a map...keep looking")
+                                for i, u := range vv {
+                                        if i == "addr" {
+                                          log.Debugf("FOUND IP!: ", u)
+                                          ip = u.(string)
+                                        }
+                                }
+   			  case []interface{}:
+     			  	log.Debugf("An array .. keep looking?")
+      				for i, u := range vv {
+           				fmt.Println(i, u)
+       			   	}
+  			   default:
+      			 	log.Debugf("I don't know how to handle this type")
+		    	  }
+                         }
+                     }
           }
           return true, nil
         })
-        fmt.Println("Paging Err:" , pErr)
-
-    return "", nil
+        log.Debugf("Paging Err:" , pErr)
+        return ip, nil
 }
 
 func (d *Driver) getPortIdFromIp(ip string, tenantId string) (string, error) {
-	opts := ports.ListOpts{TeantID: tenantId}
-	pager := ports.List(client, opts)
-	
-	var portId string := nil
-	
-	pErr := spager.EachPage(func(page pagination.Page) (bool, error) {
-       portList, err := servers.ExtractServers(page)
-       fmt.Println("Err:" , err)
+        client := d.getNetworkClient()
+	opts := ports.ListOpts{TenantID: tenantId}
+	pager := ports.List(client, opts)	
+        var portId string = ""	
+        pErr := pager.EachPage(func(page pagination.Page) (bool, error) {
+        portList, err := ports.ExtractPorts(page)
+        log.Debugf("Err:" , err)
           for _, p := range portList {
-                fmt.Println(p)
                 ipAddresses := p.FixedIPs
                 for _, ipAdd := range ipAddresses {
                 	if ipAdd.IPAddress == ip {
                 		portId = p.ID
-                		return portId , nil
+                		break
                 	}
                 }
           }
           return true, nil
         })
-        fmt.Println("Paging Err:" , pErr)
-    return "", nil
+        log.Debugf("Paging Err:" , pErr)
+    return portId, nil
 }
 
 
@@ -423,23 +498,25 @@ func (d *Driver) getNetworkClient() *gophercloud.ServiceClient {
 		}
 	// Authorize
 	provider, err := openstack.AuthenticatedClient(opts)
-	fmt.Println(provider, "Err:" , err)
+        if err != nil {
+		log.Debugf("Err:" , err)
+        }
 	// Get the compute client
 	netClient, err := openstack.NewNetworkV2(provider, gophercloud.EndpointOpts{
 		    Name:   "neutron",
-		    Region: "RegionOne",
+		    Region: d.RegionName,
 		})
   	
   	return netClient
 }
 
 func (d *Driver) getClient() *gophercloud.ServiceClient {
-   ident :=     d.IdentityEndpoint
-   username :=  d.Username
-   password :=  d.Password
-   tid :=       d.TenantID
+   	ident :=     d.IdentityEndpoint
+   	username :=  d.Username
+   	password :=  d.Password
+   	tid :=       d.TenantID
 
-   opts := gophercloud.AuthOptions{
+   	opts := gophercloud.AuthOptions{
                  IdentityEndpoint: ident,
                  Username: username,
                  Password: password,
@@ -447,19 +524,21 @@ func (d *Driver) getClient() *gophercloud.ServiceClient {
                 }
         // Authorize
         provider, err := openstack.AuthenticatedClient(opts)
-        fmt.Println(provider, "Err:" , err)
+        if err != nil {
+        	log.Debugf("Err:" , err)
+        }
         // Get the compute client
         client, err := openstack.NewComputeV2(provider, gophercloud.EndpointOpts{
-                    Region: "RegionOne",
+                    Region: d.RegionName,
                 })
 
-        return client
+       return client
 }
 
 //provide the os-security-group rules for ICMP, SSH, and Docker 2357
 func (d *Driver) setSecurityGroups() error {
 	err := errors.New("")
-	client := d.getClient()
+	client := d.getNetworkClient()
 	
 	secopts1 := rules.CreateOpts{
 		Direction:      rules.DirIngress,
@@ -467,7 +546,7 @@ func (d *Driver) setSecurityGroups() error {
 		Protocol: 	rules.ProtocolICMP,
 		PortRangeMax:	"22",
 		PortRangeMin:	"22",
-		SecGroupID:	"1",
+		SecGroupID:	d.SecurityGroup,
 	}
 	secopts2 := rules.CreateOpts{
 		Direction:      rules.DirEgress,
@@ -475,72 +554,48 @@ func (d *Driver) setSecurityGroups() error {
 		Protocol: 	rules.ProtocolTCP,
 		PortRangeMax:	"22",
 		PortRangeMin:	"22",
-		SecGroupID:	"1",
+		SecGroupID:	d.SecurityGroup,
 	}
 	s1, secErr1 := rules.Create(client, secopts1).Extract()
 	fmt.Println("Err:", secErr1, s1)
 	if secErr1 != nil {
-		return secErr1
+		//log.Errorf(secErr1)
+                fmt.Println(secErr1)
 	}
 	s2, secErr2 := rules.Create(client, secopts2).Extract()
 	fmt.Println("Err:", secErr2, s2)
 	if secErr2 != nil {
-		return secErr2
+		//log.Errorf(secErr2)
+                fmt.Println(secErr2)
 	}
-
 
 	secopts3 := rules.CreateOpts{
 		Direction:      rules.DirIngress,
 		EtherType:	rules.Ether4,
-		Protocol: 	rules.ProtocolICMP,
-		PortRangeMax:	"-1",
-		PortRangeMin:	"-1",
-		SecGroupID:	"1",
+		Protocol: 	rules.ProtocolTCP,
+		PortRangeMax:	"2375",
+		PortRangeMin:	"2375",
+		SecGroupID:	d.SecurityGroup,
 	}
 	secopts4 := rules.CreateOpts{
 		Direction:      rules.DirEgress,
 		EtherType:	rules.Ether4,
-		Protocol: 	rules.ProtocolICMP,
-		PortRangeMax:	"-1",
-		PortRangeMin:	"-1",
-		SecGroupID:	"1",
+		Protocol: 	rules.ProtocolTCP,
+		PortRangeMax:	"2375",
+		PortRangeMin:	"2375",
+		SecGroupID:	d.SecurityGroup,
 	}
 	s3, secErr3 := rules.Create(client, secopts3).Extract()
 	fmt.Println("Err:", secErr3, s3)
 	if secErr3 != nil {
-		return secErr3
+		//log.Errorf(secErr3)
+                fmt.Println(secErr3)
 	}
 	s4, secErr4 := rules.Create(client, secopts4).Extract()
 	fmt.Println("Err:", secErr4, s4)
 	if secErr4 != nil {
-		return secErr4
-	}
-	
-	secopts5 := rules.CreateOpts{
-		Direction:      rules.DirIngress,
-		EtherType:	rules.Ether4,
-		Protocol: 	rules.ProtocolTCP,
-		PortRangeMax:	"2375",
-		PortRangeMin:	"2375",
-		SecGroupID:	"1",
-	}
-	secopts6 := rules.CreateOpts{
-		Direction:      rules.DirEgress,
-		EtherType:	rules.Ether4,
-		Protocol: 	rules.ProtocolTCP,
-		PortRangeMax:	"2375",
-		PortRangeMin:	"2375",
-		SecGroupID:	"1",
-	}
-	s5, secErr5 := rules.Create(client, secopts5).Extract()
-	fmt.Println("Err:", secErr5, s5)
-	if secErr5 != nil {
-		return secErr5
-	}
-	s6, secErr6 := rules.Create(client, secopts6).Extract()
-	fmt.Println("Err:", secErr6, s6)
-	if secErr6 != nil {
-		return secErr6
+		//log.Errorf(secErr4)
+                fmt.Println(secErr4)
 	}
 	
 	return err
