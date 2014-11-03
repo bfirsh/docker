@@ -16,7 +16,6 @@ import (
 	"os/exec"
 	
 	"github.com/docker/docker/pkg/log"
-	"github.com/docker/docker/hosts/drivers"
 	"github.com/docker/docker/hosts/ssh"
 	"github.com/docker/docker/hosts/state"
 	flag "github.com/docker/docker/pkg/mflag"
@@ -47,7 +46,9 @@ type Driver struct {
 	IPAddress   	  string
 	Flavor        	  string
 	FloatingIpNetwork string
-	SecurityGroup
+	FloatingIpPort	  string
+	SecurityGroup     string
+	NovaNetwork		  bool
 	storePath   	  string
 }
 
@@ -60,7 +61,9 @@ type CreateFlags struct {
 	TenantID		  *string
 	Flavor       	  *string
 	FloatingIpNetwork *string
+	FloatingIpPort	  *string
 	SecurityGroup	  *string
+	NovaNetwork		  *bool
 }
 
 func init() {
@@ -114,10 +117,20 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 		"public",
 		"Openstack Floating IP Network UUID",
 	)
+	createFlags.FloatingIpPort = cmd.String(
+		[]string{"-openstack-floating-port"},
+		"",
+		"Openstack Floating IP Network UUID",
+	)
 	createFlags.SecurityGroup = cmd.String(
 		[]string{"-openstack-security-group"},
 		"default",
 		"Openstack Flavor Setting",
+	)
+	createFlags.NovaNetwork = cmd.Bool(
+		[]string{"-openstack-nova-net"},
+		"false",
+		"Using Openstack Nova Network?",
 	)
 	return createFlags
 }	
@@ -140,7 +153,9 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	d.TenantID = *flags.TenantID
 	d.Flavor = *flags.Flavor
 	d.FloatingIpNetwork = *flags.FloatingIpNetwork
+	d.FloatingIpPort = *flags.FloatingIpPort
 	d.SecurityGroup = *flags.SecurityGroup
+	d.NovaNetwork = *flags.NovaNetwork
 	
 	// *Fixme, think about adding the function
 	// pts, err := openstack.AuthOptionsFromEnv()
@@ -175,7 +190,18 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	// Flavor is defaulted to m1.small
 	// FloatingIpNetwork defaulted to public
 	// SecurityGroup defaulted to defualt
-
+    // NovaNetwork defaulted to false
+    if d.NovaNetwork {
+    	log.Infof("Using Nova Network Config")
+    } else {
+    	if d.FloatingIpNetwork == "" {
+			return fmt.Errorf("openstack driver requires the --openstack-floating-net option")
+		}
+    	if d.FloatingIpPort == "" {
+			return fmt.Errorf("openstack driver requires the --openstack-floating-port option")
+		}
+    }
+    
 	return nil
 }
 
@@ -221,7 +247,7 @@ func (d *Driver) Create() error {
 	}
 	//create the server
   	s, sErr := servers.Create(client, buildOpts).Extract()
-	log.Debugf("Waiting for SSH...")
+	log.Debugf("Err:", sErr)
 	log.Infof("Creating server.")
 
 	sWaitErr := servers.WaitForStatus(client, s.ID, "ACTIVE", 300)
@@ -231,41 +257,55 @@ func (d *Driver) Create() error {
 	}	
 	log.Infof("Server created successfully.", s.ID)
 	
+	// *Warning only suitable for devstack
+  	if d.NovaNetwork {
+  	    addip, addIpErr := floatingips.AddNovaNetIp(client, addopts).Extract()
+  	    if addIpErr {
+		     log.Debugf("Err:", addIpErr)
+	    }	
+	    log.Infof("Adding Floating IP:", addip)
+	
+	    //create floating ip --nova-network? (compute vs neutron APIs) (**Dev effort for gophercloud APIs)
+	    ipBuildOpts := floatingips.CreateNovaNetIpOpts{}
   	
-  	addip, addIpErr := floatingips.AddNovaNetIp(client, addopts).Extract()
-  	if addIpErr {
-		log.Debugf("Err:", addIpErr)
-	}	
-	log.Infof("Adding Floating IP:", addip)
+  	    fip, floatErr := floatingips.CreateNovaNetIp(client, ipbuildopts).Extract()
+  	    if floatErr {
+		    log.Debugf("Err:", floatErr)
+	    }	
+	    log.Infof("Created Floating IP")
+	    
+	    instance := s.ID
+	    //FixMe TODO, need to retreive IP from CreatNovaNetIp()
+  	    ip := "192.168.1.225"
+  	    pool := "public"
+  	    addopts := floatingips.AddNovaNetIpOpts{
+		    ServerID:    instance,
+	    	IPAddress:   ip,
+		    Pool:		 pool,
+	    }
 	
-	//create floating ip --nova-network? (compute vs neutron APIs) (**Dev effort for gophercloud APIs)
-	ipBuildOpts := floatingips.CreateNovaNetIpOpts{}
-  	
-  	fip, floatErr := floatingips.CreateNovaNetIp(client, ipbuildopts).Extract()
-  	if floatErr {
-		log.Debugf("Err:", floatErr)
-	}	
-	log.Infof("Created Floating IP")
-	
-	instance := s.ID
-	//FixMe TODO, need to retreive IP from CreatNovaNetIp()
-  	ip := "192.168.1.225"
-  	pool := "public"
-  	addopts := floatingips.AddNovaNetIpOpts{
-		ServerID:    instance,
-		IPAddress:   ip,
-		Pool:		 pool,
-	}
-	
-	//Associate IP
-	addip, floatIpErr := floatingips.AddNovaNetIp(client, addopts).Extract()
-	if floatIpErr {
-		log.Debugf("Err:", floatIpErr)
-	 	return floatIpErr
-	}
-	//FixMe, TODO once we get IP from CreateNovaNetIP() we can 
-	// dynamically add this in
-	log.Infof("Adding Floating IP:", ip)
+	    //Associate IP
+	    addip, floatIpErr := floatingips.AddNovaNetIp(client, addopts).Extract()
+	    if floatIpErr {
+		    log.Debugf("Err:", floatIpErr)
+	 	    return floatIpErr
+	    }
+	    //FixMe, TODO once we get IP from CreateNovaNetIP() we can 
+	    // dynamically add this in
+	    log.Infof("Adding Floating IP:", ip)
+    } else{
+    	//TODO Use Neutron Network related Commands
+    	netClient := d.getNetworkClient()
+    	
+    	ipBuildOpts := floatingips.CreateOpts{
+    		FloatingNetworkID:  d.FloatingIpNetwork
+			FloatingIP          d.FloatingIpPort
+    		}
+    	
+    	ip, sErr := floatingips.Create(client, ipBuildOpts).Extract()
+		log.Debugf("Err:", sErr)
+		log.Infof("Created Floating Ip",  ip)
+   	}
 	
 	//set rules on security group for Docker Port, SSH, ICMP
 	secErr := d.setSecurityGroups()
@@ -282,8 +322,7 @@ func (d *Driver) setOpenstackVMName() {
 	}
 }
 
-
-func (d *Driver) getClient() *openstack.NewComputeV2 {
+func (d *Driver) getNetworkClient() *openstack.NewNetworkV2 {
    ident := 	d.IndentityEndpoint
    username := 	d.Username 
    password :=  d.Password
@@ -299,11 +338,12 @@ func (d *Driver) getClient() *openstack.NewComputeV2 {
 	provider, err := openstack.AuthenticatedClient(opts)
 	fmt.Println(reflect.TypeOf(provider), "Err:" , err)
 	// Get the compute client
-	client, err := openstack.NewComputeV2(provider, gophercloud.EndpointOpts{
-  		Region: "RegionOne",})
-  	fmt.Println(reflect.TypeOf(client), "Err:" , err)
+	netClient, err := openstack.NewNetworkV2(provider, gophercloud.EndpointOpts{
+		    Name:   "neutron",
+		    Region: "RegionOne",
+		})
   	
-  	return client
+  	return netClient
 }
 
 //provide the os-security-group rules for ICMP, SSH, and Docker 2357
