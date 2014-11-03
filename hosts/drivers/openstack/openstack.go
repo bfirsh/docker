@@ -293,6 +293,7 @@ func (d *Driver) Create() error {
 	    //FixMe, TODO once we get IP from CreateNovaNetIP() we can 
 	    // dynamically add this in
 	    log.Infof("Adding Floating IP:", ip)
+	    d.IPAddress = ip
     } else{
     	//TODO Use Neutron Network related Commands
     	netClient := d.getNetworkClient()
@@ -302,9 +303,13 @@ func (d *Driver) Create() error {
 			FloatingIP          d.FloatingIpPort
     		}
     	
-    	ip, sErr := floatingips.Create(client, ipBuildOpts).Extract()
-		log.Debugf("Err:", sErr)
-		log.Infof("Created Floating Ip",  ip)
+    	ip, ipErr := floatingips.Create(client, ipBuildOpts).Extract()
+    	if ipErr {
+		    log.Debugf("Err:", ipErr)
+	 	    return ipErr
+	    }
+		log.Infof("Created Floating Ip",  ip.FloatingIP)
+		d.IPAdress = ip.FloatingIP
    	}
 	
 	//set rules on security group for Docker Port, SSH, ICMP
@@ -316,11 +321,56 @@ func (d *Driver) Create() error {
    return nil
 }
 
+func (d *Driver) GetURL() (string, error) {
+	ip, err := d.GetIP()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("tcp://%s:2375", ip), nil
+}
+
+func (d *Driver) GetIP() (string, error) {
+	return d.IPAddress, nil
+}
+
 func (d *Driver) setOpenstackVMName() {
 	if d.OpenstackVMName == "" {
 		d.OpenStackVMName = fmt.Sprintf("docker-host-%s", utils.GenerateRandomID())
 	}
 }
+
+func (d *Driver) GetState() (state.State, error) {
+	//FixMe!
+	return state.Running, nil
+}
+
+
+func (d *Driver) Start() error {
+	_, _, err := d.getClient().DropletActions.PowerOn(d.DropletID)
+	return err
+}
+
+func (d *Driver) Stop() error {
+	_, _, err := d.getClient().DropletActions.Shutdown(d.DropletID)
+	return err
+}
+
+func (d *Driver) Remove() error {
+	return nil
+}
+
+func (d *Driver) Restart() error {
+	return nil
+}
+
+func (d *Driver) Kill() error {
+	return nil
+}
+
+func (d *DefaultDriver) GetSSHCommand(args ...string) *exec.Cmd {
+	return nil
+}
+
 
 func (d *Driver) getNetworkClient() *openstack.NewNetworkV2 {
    ident := 	d.IndentityEndpoint
