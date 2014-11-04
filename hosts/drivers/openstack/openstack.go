@@ -182,7 +182,7 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 		//TODO Check for correct URL format, think about 35357 or 5000 or other
 		//endpoints that may be auth and could work.
 	}
-	if d.Keypair == "" {
+	if d.KeyPair == "" {
 		return fmt.Errorf("openstack driver requires the --openstack-keypair option")
 	}
 	
@@ -268,7 +268,7 @@ func (d *Driver) Create() error {
 	imageRef := d.ImageID
 	flavorRef := d.Flavor
 	userData := cloudInitData 
-	keypair := d.KayPair
+	keypair := d.KeyPair
 
 	buildOpts := servers.CreateOpts{
 		Name:       vmname,
