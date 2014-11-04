@@ -28,13 +28,13 @@ import (
 
 type Driver struct {
 	IdentityEndpoint  string
-	KeyPair		      string
+	KeyPair		  string
 	AvailabilityZone  string
-	UserUUID	      int
-	Username	      string
+	UserUUID	  int
+	Username	  string
 	Password      	  string
-	TenantID	      string
-	TenantName 	      string
+	TenantID	  string
+	TenantName 	  string
 	RegionID     	  string 
 	RegionName        string	
 	OpenstackVMID     int
@@ -44,7 +44,7 @@ type Driver struct {
 	Flavor        	  string
 	FloatingIpNetwork string
 	FloatingIpPort	  string
-    NetworkID	      string
+        NetworkID	  string
 	SecurityGroup     string
 	NovaNetwork  	  bool
 	NameServer  	  string
@@ -53,19 +53,19 @@ type Driver struct {
 
 type CreateFlags struct {
 	IdentityEndpoint  *string
-	KeyPair		      *string
-	Username	      *string
+	KeyPair		  *string
+	Username	  *string
 	Password      	  *string
-	ImageID		      *string
-	TenantID	      *string
-    RegionName	      *string
+	ImageID		  *string
+	TenantID	  *string
+        RegionName	  *string
 	Flavor       	  *string
 	FloatingIpNetwork *string
 	FloatingIpPort	  *string
-	NetworkID	      *string
+	NetworkID	  *string
 	SecurityGroup	  *string
-	NovaNetwork	      *bool
-	NameServer	      *string
+	NovaNetwork	  *bool
+	NameServer	  *string
 }
 
 func init() {
@@ -163,7 +163,7 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	d.Password = *flags.Password
 	d.ImageID =  *flags.ImageID
 	d.TenantID = *flags.TenantID
-    d.RegionName = *flags.RegionName
+        d.RegionName = *flags.RegionName
 	d.Flavor = *flags.Flavor
 	d.FloatingIpNetwork = *flags.FloatingIpNetwork
 	d.NetworkID = *flags.NetworkID
@@ -229,8 +229,8 @@ func (d *Driver) Create() error {
 	
 	//Runn cloud-init scripts instead of ssh commands
 	//Load User Data for docker installation OR wait for SSH, 
-    var cloudInitData []byte
-    if d.NameServer == "" {
+        var cloudInitData []byte
+        if d.NameServer == "" {
 	  cloudInitData = []byte(""+
 	  "#!/bin/bash\n"+
 	  "sudo echo -e 'docker\ndocker' | passwd root\n" +
