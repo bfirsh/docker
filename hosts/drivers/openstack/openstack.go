@@ -28,13 +28,13 @@ import (
 
 type Driver struct {
 	IdentityEndpoint  string
-	Keypair		  string
+	KeyPair		      string
 	AvailabilityZone  string
-	UserUUID	  int
-	Username	  string
+	UserUUID	      int
+	Username	      string
 	Password      	  string
-	TenantID	  string
-	TenantName 	  string
+	TenantID	      string
+	TenantName 	      string
 	RegionID     	  string 
 	RegionName        string	
 	OpenstackVMID     int
@@ -44,28 +44,28 @@ type Driver struct {
 	Flavor        	  string
 	FloatingIpNetwork string
 	FloatingIpPort	  string
-        NetworkID	  string
+    NetworkID	      string
 	SecurityGroup     string
-	NovaNetwork	  bool
-	NameServer	  string
+	NovaNetwork  	  bool
+	NameServer  	  string
 	storePath   	  string
 }
 
 type CreateFlags struct {
 	IdentityEndpoint  *string
-	Keypair		  *string
-	Username	  *string
+	KeyPair		      *string
+	Username	      *string
 	Password      	  *string
-	ImageID		  *string
-	TenantID	  *string
-        RegionName	  *string
+	ImageID		      *string
+	TenantID	      *string
+    RegionName	      *string
 	Flavor       	  *string
 	FloatingIpNetwork *string
 	FloatingIpPort	  *string
-	NetworkID	  *string
+	NetworkID	      *string
 	SecurityGroup	  *string
-	NovaNetwork	  *bool
-	NameServer	  *string
+	NovaNetwork	      *bool
+	NameServer	      *string
 }
 
 func init() {
@@ -84,7 +84,7 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 		"",
 		"Openstack Authentication Endpoint",
 	)
-	createFlags.Keypair = cmd.String(
+	createFlags.KeyPair = cmd.String(
 		[]string{"-openstack-keypair"},
 		"",
 		"Openstack Authentication Endpoint",
@@ -158,12 +158,12 @@ func (d *Driver) DriverName() string {
 func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	flags := flagsInterface.(*CreateFlags)
 	d.IdentityEndpoint = *flags.IdentityEndpoint
-	d.Keypair = *flags.Keypair
+	d.KeyPair = *flags.KeyPair
 	d.Username = *flags.Username
 	d.Password = *flags.Password
 	d.ImageID =  *flags.ImageID
 	d.TenantID = *flags.TenantID
-        d.RegionName = *flags.RegionName
+    d.RegionName = *flags.RegionName
 	d.Flavor = *flags.Flavor
 	d.FloatingIpNetwork = *flags.FloatingIpNetwork
 	d.NetworkID = *flags.NetworkID
@@ -223,13 +223,14 @@ func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 
 func (d *Driver) Create() error {
 	d.setOpenstackVMName()
+	
+	// *FixMe need to ingest keypair from openstack
 	//Get SSH key from flags, or create one.
-	//FixMe, OpenstackAPIs v2 don't let you specify the
-	//ssh key!!? running cloud-init scripts instead
+	
+	//Runn cloud-init scripts instead of ssh commands
 	//Load User Data for docker installation OR wait for SSH, 
-	//run commands through SSH (digitalocean #156)
-        var cloudInitData []byte
-        if d.NameServer == "" {
+    var cloudInitData []byte
+    if d.NameServer == "" {
 	  cloudInitData = []byte(""+
 	  "#!/bin/bash\n"+
 	  "sudo echo -e 'docker\ndocker' | passwd root\n" +
@@ -241,6 +242,7 @@ func (d *Driver) Create() error {
 	  "sudo service ufw stop\n" +
 	  "sudo docker -d -H tcp://0.0.0.0:2375 &\n")
 	} else {
+		  //Support different nameserver injection
           cloudInitData = []byte(""+
           "#!/bin/bash\n"+
           "sudo echo -e 'docker\ndocker' | passwd root\n" +
@@ -257,6 +259,7 @@ func (d *Driver) Create() error {
 	   Authenticate
 	   Get compute client */
 	client := d.getClient()
+	
 	// TODO *FixMe Verify image, flavor,  exists
 	// just letting it pass through un checked right now
 	
@@ -265,12 +268,13 @@ func (d *Driver) Create() error {
 	imageRef := d.ImageID
 	flavorRef := d.Flavor
 	userData := cloudInitData 
-	//(**Openstack v2 Compute doesnt seem to support keypair injection)
+	keypair := d.KayPair
+
 	buildOpts := servers.CreateOpts{
 		Name:       vmname,
 		ImageRef:   imageRef,
 		FlavorRef:  flavorRef,
-		//KeyPair:  keypair,
+		KeyPair:    keypair,
 		UserData:   userData,
 	}
         if !d.NovaNetwork {
@@ -280,7 +284,8 @@ func (d *Driver) Create() error {
            networks = append(networks, network)
            buildOpts.Networks = networks
         }
-	//create the server
+        
+	//Create the server
   	s, sErr := servers.Create(client, buildOpts).Extract()
         if sErr != nil {
            log.Infof("Error Creating Server", sErr)
@@ -295,10 +300,12 @@ func (d *Driver) Create() error {
 	}	
 	log.Infof("Server created successfully.", s.ID)
 	
-	// *Warning only suitable for devstack
+	// ***Warning only suitable for devstack
+	//*FixMe (Experimental) hardcoded IP for FLOATING_IP_POLL 1st address
   	if d.NovaNetwork {
 	    
-	    //create floating ip --nova-network? (compute vs neutron APIs) (**Dev effort for gophercloud APIs)
+	    // create floating ip --nova-network? (compute vs neutron APIs)
+	    // (**Added to gophercloud APIs)
 	    ipBuildOpts := floatingips.CreateNovaNetIpOpts{}
   	
   	    fip, floatErr := floatingips.CreateNovaNetIp(client, ipBuildOpts).Extract()
@@ -308,7 +315,9 @@ func (d *Driver) Create() error {
 	    log.Infof("Created Floating IP", fip)
 	    
 	    instance := s.ID
+	    
 	    //FixMe TODO, need to retreive IP from CreatNovaNetIp()
+	    //*Need to create "CreateNovaNetIpResult.go" in requests.go in gophercloud
   	    ip := "192.168.1.225"
   	    pool := "public"
   	    addopts := floatingips.AddNovaNetIpOpts{
@@ -328,19 +337,21 @@ func (d *Driver) Create() error {
 	    //FixMe, TODO once we get IP from CreateNovaNetIP() we can 
 	    // dynamically add this in
 	    log.Infof("Adding Floating IP:", ip)
-	    d.IPAddress = ip
+	    d.IPAddress = ip    
     } else{
-    	//TODO Use Neutron Network related Commands
+    	
+    	// Support OpenStack Neutron
     	netClient := d.getNetworkClient()
     	
-    	//TODO!!
     	ip, err := d.getIpFromVmId(s.ID, vmname)
     	if err != nil { log.Infof("Couldn't Find IPAddress") }
     	portID, portErr := d.getPortIdFromIp(ip, d.TenantID)
     	if portErr != nil { log.Infof("Couldn't Find Port") }
     	
+    	// FixMe! ips are created, but don't reuse ones that
+    	// are already allocated. 
     	ipBuildOpts := floatingips.CreateOpts{
-	    		FloatingNetworkID:  d.FloatingIpNetwork,
+	    	FloatingNetworkID:  d.FloatingIpNetwork,
 			PortID:             portID,
     		}
     	
@@ -354,6 +365,8 @@ func (d *Driver) Create() error {
    	}
 	
 	//set rules on security group for Docker Port, SSH, ICMP
+	// FixMe* you may see errors on these request if they
+	// already exists. neeeds error handeling
 	secErr := d.setSecurityGroups()
 	if secErr != nil {
 		log.Infof("Error Setting up Security Group Rules")
@@ -376,8 +389,8 @@ func (d *Driver) getIpFromVmId(id string, name string) (string, error) {
         serverList, err := servers.ExtractServers(page)
         log.Debugf("Err:" , err)
           for _, s := range serverList {
-                // We can get status this way!!
-                // s.Status
+                // We can get status this way
+                // FixMe! s.Status (Add to geState func)
                 addresses := s.Addresses
 		for _, ipAdd := range addresses {
                         ipAddMap := ipAdd.([]interface{})
@@ -394,12 +407,7 @@ func (d *Driver) getIpFromVmId(id string, name string) (string, error) {
                                           ip = u.(string)
                                         }
                                 }
-   			  case []interface{}:
-     			  	log.Debugf("An array .. keep looking?")
-      				for i, u := range vv {
-           				fmt.Println(i, u)
-       			   	}
-  			   default:
+  			  default:
       			 	log.Debugf("I don't know how to handle this type")
 		    	  }
                          }
@@ -411,6 +419,7 @@ func (d *Driver) getIpFromVmId(id string, name string) (string, error) {
         return ip, nil
 }
 
+// Retrieve the PortID for floating ip association from the IP/Tenant
 func (d *Driver) getPortIdFromIp(ip string, tenantId string) (string, error) {
         client := d.getNetworkClient()
 	opts := ports.ListOpts{TenantID: tenantId}
@@ -453,38 +462,44 @@ func (d *Driver) setOpenstackVMName() {
 	}
 }
 
+//TODO
 func (d *Driver) GetState() (state.State, error) {
 	//FixMe!
 	return state.Running, nil
 }
 
-
+//TODO
 func (d *Driver) Start() error {
 	return nil
 }
-
+//TODO
 func (d *Driver) Stop() error {
 	return nil
 }
-
+//TODO
 func (d *Driver) Remove() error {
 	return nil
 }
-
+//TODO
 func (d *Driver) Restart() error {
 	return nil
 }
-
+//TODO
 func (d *Driver) Kill() error {
 	return nil
 }
-
+//TODO
 func (d *Driver) GetSSHCommand(args ...string) *exec.Cmd {
+	//*FixMe need to import SSH Key specifed / or create one and import it.
+	//return ssh.GetSSHCommand(d.IPAddress, 22, "root", d.sshKeyPath(), args...)
 	return nil
 }
 
 
 func (d *Driver) getNetworkClient() *gophercloud.ServiceClient {
+	
+   // why did i set these vars first?
+   // Go newb	
    ident := 	d.IdentityEndpoint
    username := 	d.Username 
    password :=  d.Password
@@ -511,6 +526,8 @@ func (d *Driver) getNetworkClient() *gophercloud.ServiceClient {
 }
 
 func (d *Driver) getClient() *gophercloud.ServiceClient {
+	// why did i set these vars first?
+    // Go newb
    	ident :=     d.IdentityEndpoint
    	username :=  d.Username
    	password :=  d.Password
