@@ -1,6 +1,8 @@
 package hyperv
 
 import (
+	"archive/tar"
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -14,26 +16,31 @@ import (
 	"github.com/docker/docker/hosts/ssh"
 	"github.com/docker/docker/hosts/state"
 	"github.com/docker/docker/pkg/log"
-	"github.com/docker/docker/utils"
 	flag "github.com/docker/docker/pkg/mflag"
+	"github.com/docker/docker/utils"
 )
 
 type Driver struct {
 	storePath      string
-	Boot2DockerURL string
-	Boot2DockerLoc string
-	VSwitch        string
+	boot2DockerURL string
+	boot2DockerLoc string
+	vSwitch        string
 	MachineName    string
+	diskImage      string
+	diskSize       int
+	memSize        int
 }
 
 type CreateFlags struct {
-	Boot2DockerURL *string
-	Boot2DockerLoc *string
-	VSwitch        *string
+	boot2DockerURL *string
+	boot2DockerLoc *string
+	vSwitch        *string
+	diskSize       *int
+	memSize        *int
 }
 
 func init() {
-	drivers.Register("hyperv", &drivers.RegisteredDriver{
+	drivers.Register("hyper-v", &drivers.RegisteredDriver{
 		New:                 NewDriver,
 		RegisterCreateFlags: RegisterCreateFlags,
 	})
@@ -43,9 +50,11 @@ func init() {
 // "docker hosts create"
 func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 	createFlags := new(CreateFlags)
-	createFlags.Boot2DockerURL = cmd.String([]string{"-hyperv-boot2docker-url"}, "", "The URL of the boot2docker image. Defaults to the latest available version")
-	createFlags.Boot2DockerLoc = cmd.String([]string{"-hyperv-boot2docker-location"}, "", "Local boot2docker iso.")
-	createFlags.VSwitch = cmd.String([]string{"-hyperv-virtual-switch"}, "", "Name of virtual switch. Defaults to first found.")
+	createFlags.boot2DockerURL = cmd.String([]string{"-hyper-v-boot2docker-url"}, "", "The URL of the boot2docker image. Defaults to the latest available version.")
+	createFlags.boot2DockerLoc = cmd.String([]string{"-hyper-v-boot2docker-location"}, "", "Local boot2docker iso. Overrides URL.")
+	createFlags.vSwitch = cmd.String([]string{"-hyper-v-virtual-switch"}, "", "Name of virtual switch. Defaults to first found.")
+	createFlags.diskSize = cmd.Int([]string{"-hyper-v-disk-size"}, 20000, "Size of disk for host in MB.")
+	createFlags.memSize = cmd.Int([]string{"-hyper-v-memory"}, 1024, "Size of memory for host in MB.")
 	return createFlags
 }
 
@@ -54,7 +63,7 @@ func NewDriver(storePath string) (drivers.Driver, error) {
 }
 
 func (d *Driver) DriverName() string {
-	return "hyperv"
+	return "hyper-v"
 }
 
 func (d *Driver) GetURL() (string, error) {
@@ -65,7 +74,8 @@ func (d *Driver) GetURL() (string, error) {
 	if ip == "" {
 		return "", nil
 	}
-	return fmt.Sprintf("tcp://%s:2376", ip), nil
+	// No security for now, expect boot2docker running insecure
+	return fmt.Sprintf("tcp://%s:2375", ip), nil
 }
 
 func (d *Driver) GetState() (state.State, error) {
@@ -73,7 +83,7 @@ func (d *Driver) GetState() (state.State, error) {
 	command := []string{
 		"(",
 		"Get-VM",
-		"-Name", "'" + d.MachineName + "'",
+		"-Name", d.MachineName,
 		").state"}
 	stdout, err := execute(command)
 	if err != nil {
@@ -122,9 +132,9 @@ func (d *Driver) Create() error {
 
 	var isoURL string
 
-	if d.Boot2DockerLoc == "" {
-		if d.Boot2DockerURL != "" {
-			isoURL = d.Boot2DockerURL
+	if d.boot2DockerLoc == "" {
+		if d.boot2DockerURL != "" {
+			isoURL = d.boot2DockerURL
 		} else {
 			// HACK: Docker 1.3 boot2docker image
 			isoURL = "http://cl.ly/1c1c0O3N193A/download/boot2docker-1.2.0-dev.iso"
@@ -139,7 +149,7 @@ func (d *Driver) Create() error {
 			return err
 		}
 	} else {
-		copyFile(d.Boot2DockerLoc, path.Join(d.storePath, "boot2docker.iso"))
+		copyFile(d.boot2DockerLoc, path.Join(d.storePath, "boot2docker.iso"))
 	}
 
 	log.Infof("Creating SSH key...")
@@ -148,23 +158,23 @@ func (d *Driver) Create() error {
 		return err
 	}
 
-	log.Infof("Creating  VM...")
+	log.Infof("Creating VM...")
 
-	//Get which virtual switch to use from the user
 	virtualSwitch, err := d.chooseVirtualSwitch()
 	if err != nil {
 		return err
 	}
 
-	//hardcoded to 1G at the moment
-	memorySizeInBytes := fmt.Sprintf("%d", (1024 * 1024 * 1024))
+	err = d.generateDiskImage()
+	if err != nil {
+		return err
+	}
 
-	log.Infof("Creating a new Virtual Machine")
 	command := []string{
 		"New-VM",
-		"-Name", "'" + d.MachineName + "'",
-		"-Path", "'" + d.storePath + "'",
-		"-MemoryStartupBytes", memorySizeInBytes}
+		"-Name", d.MachineName,
+		"-Path", fmt.Sprintf("'%s'", d.storePath),
+		"-MemoryStartupBytes", fmt.Sprintf("%dMB", d.memSize)}
 	_, err = execute(command)
 	if err != nil {
 		return err
@@ -172,8 +182,17 @@ func (d *Driver) Create() error {
 
 	command = []string{
 		"Set-VMDvdDrive",
-		"-VMName", "'" + d.MachineName + "'",
-		"-Path", "'" + path.Join(d.storePath, "boot2docker.iso") + "'"}
+		"-VMName", d.MachineName,
+		"-Path", fmt.Sprintf("'%s'", path.Join(d.storePath, "boot2docker.iso"))}
+	_, err = execute(command)
+	if err != nil {
+		return err
+	}
+
+	command = []string{
+		"Add-VMHardDiskDrive",
+		"-VMName", d.MachineName,
+		"-Path", fmt.Sprintf("'%s'", d.diskImage)}
 	_, err = execute(command)
 	if err != nil {
 		return err
@@ -181,8 +200,8 @@ func (d *Driver) Create() error {
 
 	command = []string{
 		"Connect-VMNetworkAdapter",
-		"-VMName", "'" + d.MachineName + "'",
-		"-SwitchName", "'" + virtualSwitch + "'"}
+		"-VMName", d.MachineName,
+		"-SwitchName", fmt.Sprintf("'%s'", virtualSwitch)}
 	_, err = execute(command)
 	if err != nil {
 		return err
@@ -193,8 +212,8 @@ func (d *Driver) Create() error {
 }
 
 func (d *Driver) chooseVirtualSwitch() (string, error) {
-	if d.VSwitch != "" {
-		return d.VSwitch, nil
+	if d.vSwitch != "" {
+		return d.vSwitch, nil
 	}
 	command := []string{
 		"@(Get-VMSwitch).Name"}
@@ -212,9 +231,11 @@ func (d *Driver) chooseVirtualSwitch() (string, error) {
 
 func (d *Driver) SetConfigFromFlags(flagsInterface interface{}) error {
 	flags := flagsInterface.(*CreateFlags)
-	d.Boot2DockerURL = *flags.Boot2DockerURL
-	d.Boot2DockerLoc = *flags.Boot2DockerLoc
-	d.VSwitch = *flags.VSwitch
+	d.boot2DockerURL = *flags.boot2DockerURL
+	d.boot2DockerLoc = *flags.boot2DockerLoc
+	d.vSwitch = *flags.vSwitch
+	d.diskSize = *flags.diskSize
+	d.memSize = *flags.memSize
 	return nil
 }
 
@@ -235,7 +256,7 @@ func (d *Driver) wait() error {
 func (d *Driver) Start() error {
 	command := []string{
 		"Start-VM",
-		"-Name", "'" + d.MachineName + "'"}
+		"-Name", d.MachineName}
 	_, err := execute(command)
 	if err != nil {
 		return err
@@ -246,7 +267,7 @@ func (d *Driver) Start() error {
 func (d *Driver) Stop() error {
 	command := []string{
 		"Stop-VM",
-		"-Name", "'" + d.MachineName + "'"}
+		"-Name", d.MachineName}
 	_, err := execute(command)
 	if err != nil {
 		return err
@@ -277,26 +298,42 @@ func (d *Driver) Remove() error {
 	}
 	command := []string{
 		"Remove-VM",
-		"-Name", "'" + d.MachineName + "'",
+		"-Name", d.MachineName,
 		"-Force"}
 	_, err = execute(command)
 	return err
 }
 
 func (d *Driver) Restart() error {
+	err := d.Stop()
+	if err != nil {
+		return err
+	}
+
+	return d.Start()
+}
+
+func (d *Driver) Kill() error {
 	command := []string{
-		"Restart-VM",
-		"-Name", "'" + d.MachineName + "'",
-		"-Force"}
+		"Stop-VM",
+		"-Name", d.MachineName,
+		"-TurnOff"}
 	_, err := execute(command)
 	if err != nil {
 		return err
 	}
-	return d.wait()
-}
-
-func (d *Driver) Kill() error {
-	return d.Stop()
+	for {
+		s, err := d.GetState()
+		if err != nil {
+			return err
+		}
+		if s == state.Running {
+			time.Sleep(1 * time.Second)
+		} else {
+			break
+		}
+	}
+	return nil
 }
 
 func (d *Driver) setMachineNameIfNotSet() {
@@ -309,7 +346,7 @@ func (d *Driver) GetIP() (string, error) {
 	command := []string{
 		"((",
 		"Get-VM",
-		"-Name", "'" + d.MachineName + "'",
+		"-Name", d.MachineName,
 		").networkadapters[0]).ipaddresses[0]"}
 	stdout, err := execute(command)
 	if err != nil {
@@ -386,112 +423,99 @@ func downloadISO(dir, file, url string) error {
 	return nil
 }
 
-// // Make a boot2docker VM disk image.
-// func (d *Driver) generateDiskImage(size int) error {
-// 	log.Debugf("Creating %d MB hard disk image...", size)
+func (d *Driver) generateDiskImage() error {
+	// Create a small fixed vhd, put the tar in,
+	// convert to dynamic, then resize
 
-// 	magicString := "boot2docker, please format-me"
+	d.diskImage = path.Join(d.storePath, "disk.vhd")
+	fixed := path.Join(d.storePath, "fixed.vhd")
+	log.Infof("Creating VHD")
+	command := []string{
+		"New-VHD",
+		"-Path", fmt.Sprintf("'%s'", fixed),
+		"-SizeBytes", "10MB",
+		"-Fixed"}
+	_, err := execute(command)
+	if err != nil {
+		return err
+	}
 
-// 	buf := new(bytes.Buffer)
-// 	tw := tar.NewWriter(buf)
+	tarBuf, err := d.generateTar()
+	if err != nil {
+		return err
+	}
 
-// 	// magicString first so the automount script knows to format the disk
-// 	file := &tar.Header{Name: magicString, Size: int64(len(magicString))}
-// 	if err := tw.WriteHeader(file); err != nil {
-// 		return err
-// 	}
-// 	if _, err := tw.Write([]byte(magicString)); err != nil {
-// 		return err
-// 	}
-// 	// .ssh/key.pub => authorized_keys
-// 	file = &tar.Header{Name: ".ssh", Typeflag: tar.TypeDir, Mode: 0700}
-// 	if err := tw.WriteHeader(file); err != nil {
-// 		return err
-// 	}
-// 	pubKey, err := ioutil.ReadFile(d.publicSSHKeyPath())
-// 	if err != nil {
-// 		return err
-// 	}
-// 	file = &tar.Header{Name: ".ssh/authorized_keys", Size: int64(len(pubKey)), Mode: 0644}
-// 	if err := tw.WriteHeader(file); err != nil {
-// 		return err
-// 	}
-// 	if _, err := tw.Write([]byte(pubKey)); err != nil {
-// 		return err
-// 	}
-// 	file = &tar.Header{Name: ".ssh/authorized_keys2", Size: int64(len(pubKey)), Mode: 0644}
-// 	if err := tw.WriteHeader(file); err != nil {
-// 		return err
-// 	}
-// 	if _, err := tw.Write([]byte(pubKey)); err != nil {
-// 		return err
-// 	}
-// 	if err := tw.Close(); err != nil {
-// 		return err
-// 	}
-// 	raw := bytes.NewReader(buf.Bytes())
-// 	return createDiskImage(d.diskPath(), size, raw)
-// }
+	file, _ := os.OpenFile(fixed, os.O_WRONLY, 0644)
+	defer file.Close()
+	file.Seek(0, os.SEEK_SET)
+	_, err = file.Write(tarBuf.Bytes())
+	if err != nil {
+		return err
+	}
+	file.Close()
 
-// // createDiskImage makes a disk image at dest with the given size in MB. If r is
-// // not nil, it will be read as a raw disk image to convert from.
-// func createDiskImage(dest string, size int, r io.Reader) error {
-// 	// Convert a raw image from stdin to the dest VMDK image.
-// 	sizeBytes := int64(size) << 20 // usually won't fit in 32-bit int (max 2GB)
-// 	// FIXME: why isn't this just using the vbm*() functions?
-// 	cmd := exec.Command(vboxManageCmd, "convertfromraw", "stdin", dest,
-// 		fmt.Sprintf("%d", sizeBytes), "--format", "VMDK")
+	command = []string{
+		"Convert-VHD",
+		"-Path", fmt.Sprintf("'%s'", fixed),
+		"-DestinationPath", fmt.Sprintf("'%s'", d.diskImage),
+		"-VHDType", "Dynamic"}
+	_, err = execute(command)
+	if err != nil {
+		return err
+	}
+	command = []string{
+		"Resize-VHD",
+		"-Path", fmt.Sprintf("'%s'", d.diskImage),
+		"-SizeBytes", fmt.Sprintf("%dMB", d.diskSize)}
+	_, err = execute(command)
+	if err != nil {
+		return err
+	}
 
-// 	if os.Getenv("DEBUG") != "" {
-// 		cmd.Stdout = os.Stdout
-// 		cmd.Stderr = os.Stderr
-// 	}
+	return err
+}
 
-// 	stdin, err := cmd.StdinPipe()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	if err := cmd.Start(); err != nil {
-// 		return err
-// 	}
+// Make a boot2docker VM disk image.
+// See https://github.com/boot2docker/boot2docker/blob/master/rootfs/rootfs/etc/rc.d/automount
+func (d *Driver) generateTar() (*bytes.Buffer, error) {
+	magicString := "boot2docker, please format-me"
 
-// 	n, err := io.Copy(stdin, r)
-// 	if err != nil {
-// 		return err
-// 	}
+	buf := new(bytes.Buffer)
+	tw := tar.NewWriter(buf)
 
-// 	// The total number of bytes written to stdin must match sizeBytes, or
-// 	// VBoxManage.exe on Windows will fail. Fill remaining with zeros.
-// 	if left := sizeBytes - n; left > 0 {
-// 		if err := zeroFill(stdin, left); err != nil {
-// 			return err
-// 		}
-// 	}
-
-// 	// cmd won't exit until the stdin is closed.
-// 	if err := stdin.Close(); err != nil {
-// 		return err
-// 	}
-
-// 	return cmd.Wait()
-// }
-
-// // zeroFill writes n zero bytes into w.
-// func zeroFill(w io.Writer, n int64) error {
-// 	const blocksize = 32 << 10
-// 	zeros := make([]byte, blocksize)
-// 	var k int
-// 	var err error
-// 	for n > 0 {
-// 		if n > blocksize {
-// 			k, err = w.Write(zeros)
-// 		} else {
-// 			k, err = w.Write(zeros[:n])
-// 		}
-// 		if err != nil {
-// 			return err
-// 		}
-// 		n -= int64(k)
-// 	}
-// 	return nil
-// }
+	// magicString first so the automount script knows to format the disk
+	file := &tar.Header{Name: magicString, Size: int64(len(magicString))}
+	if err := tw.WriteHeader(file); err != nil {
+		return nil, err
+	}
+	if _, err := tw.Write([]byte(magicString)); err != nil {
+		return nil, err
+	}
+	// .ssh/key.pub => authorized_keys
+	file = &tar.Header{Name: ".ssh", Typeflag: tar.TypeDir, Mode: 0700}
+	if err := tw.WriteHeader(file); err != nil {
+		return nil, err
+	}
+	pubKey, err := ioutil.ReadFile(d.publicSSHKeyPath())
+	if err != nil {
+		return nil, err
+	}
+	file = &tar.Header{Name: ".ssh/authorized_keys", Size: int64(len(pubKey)), Mode: 0644}
+	if err := tw.WriteHeader(file); err != nil {
+		return nil, err
+	}
+	if _, err := tw.Write([]byte(pubKey)); err != nil {
+		return nil, err
+	}
+	file = &tar.Header{Name: ".ssh/authorized_keys2", Size: int64(len(pubKey)), Mode: 0644}
+	if err := tw.WriteHeader(file); err != nil {
+		return nil, err
+	}
+	if _, err := tw.Write([]byte(pubKey)); err != nil {
+		return nil, err
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
