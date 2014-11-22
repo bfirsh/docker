@@ -56,6 +56,7 @@ func (s *Store) Create(name string, driverName string, createFlags interface{}) 
 	if err := host.Create(); err != nil {
 		return host, err
 	}
+
 	return host, nil
 }
 

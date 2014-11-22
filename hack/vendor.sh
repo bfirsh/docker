@@ -65,6 +65,8 @@ clone git github.com/mitchellh/go-homedir 7d2d8c8a4e078ce3c58736ab521a40b37a504c
 
 clone git github.com/MSOpenTech/azure-sdk-for-go 814812a21a49da38c5cc808ec0958277e33c81d3
 
+clone git github.com/smartystreets/go-aws-auth eaf3e74223b0bdda4bc745d20114183804f75be9
+
 # get Go tip's archive/tar, for xattr support and improved performance
 # TODO after Go 1.4 drops, bump our minimum supported version and drop this vendored dep
 if [ "$1" = '--go' ]; then
