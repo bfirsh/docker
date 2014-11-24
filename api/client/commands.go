@@ -34,6 +34,7 @@ import (
 	_ "github.com/docker/docker/hosts/drivers/none"
 	_ "github.com/docker/docker/hosts/drivers/vcloudair"
 	_ "github.com/docker/docker/hosts/drivers/virtualbox"
+	_ "github.com/docker/docker/hosts/drivers/vsphere"
 	"github.com/docker/docker/nat"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/archive"
