@@ -82,7 +82,7 @@ func (d *Driver) Stop() error {
 }
 
 func (d *Driver) Remove() error {
-	return nil
+	return fmt.Errorf("hosts without a driver cannot be removed")
 }
 
 func (d *Driver) Restart() error {

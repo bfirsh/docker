@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -18,11 +19,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"text/tabwriter"
 	"text/template"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/engine"
@@ -36,7 +37,6 @@ import (
 	"github.com/docker/docker/nat"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/log"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/docker/pkg/parsers/filters"
@@ -52,6 +52,10 @@ import (
 
 const (
 	tarHeaderSize = 512
+)
+
+var (
+	acceptedImageFilterTags = map[string]struct{}{"dangling": {}}
 )
 
 func (cli *DockerCli) CmdHelp(args ...string) error {
@@ -84,6 +88,7 @@ func (cli *DockerCli) CmdBuild(args ...string) error {
 	noCache := cmd.Bool([]string{"#no-cache", "-no-cache"}, false, "Do not use cache when building the image")
 	rm := cmd.Bool([]string{"#rm", "-rm"}, true, "Remove intermediate containers after a successful build")
 	forceRm := cmd.Bool([]string{"-force-rm"}, false, "Always remove intermediate containers, even after unsuccessful builds")
+	pull := cmd.Bool([]string{"-pull"}, false, "Always attempt to pull a newer version of the image")
 	if err := cmd.Parse(args); err != nil {
 		return nil
 	}
@@ -123,7 +128,7 @@ func (cli *DockerCli) CmdBuild(args ...string) error {
 		root := cmd.Arg(0)
 		if utils.IsGIT(root) {
 			remoteURL := cmd.Arg(0)
-			if !strings.HasPrefix(remoteURL, "git://") && !strings.HasPrefix(remoteURL, "git@") && !utils.IsURL(remoteURL) {
+			if !utils.ValidGitTransport(remoteURL) {
 				remoteURL = "https://" + remoteURL
 			}
 
@@ -150,6 +155,11 @@ func (cli *DockerCli) CmdBuild(args ...string) error {
 			return fmt.Errorf("Error reading .dockerignore: '%s'", err)
 		}
 		for _, pattern := range strings.Split(string(ignore), "\n") {
+			pattern = strings.TrimSpace(pattern)
+			if pattern == "" {
+				continue
+			}
+			pattern = filepath.Clean(pattern)
 			ok, err := filepath.Match(pattern, "Dockerfile")
 			if err != nil {
 				return fmt.Errorf("Bad .dockerignore pattern: '%s', error: %s", pattern, err)
@@ -215,6 +225,9 @@ func (cli *DockerCli) CmdBuild(args ...string) error {
 		v.Set("forcerm", "1")
 	}
 
+	if *pull {
+		v.Set("pull", "1")
+	}
 	cli.LoadConfigFile()
 
 	headers := http.Header(make(map[string][]string))
@@ -291,7 +304,10 @@ func (cli *DockerCli) CmdLogin(args ...string) error {
 	// the password or email from the config file, so prompt them
 	if username != authconfig.Username {
 		if password == "" {
-			oldState, _ := term.SaveState(cli.inFd)
+			oldState, err := term.SaveState(cli.inFd)
+			if err != nil {
+				return err
+			}
 			fmt.Fprintf(cli.out, "Password: ")
 			term.DisableEcho(cli.inFd, oldState)
 
@@ -474,27 +490,60 @@ func (cli *DockerCli) CmdInfo(args ...string) error {
 	}
 	out.Close()
 
-	fmt.Fprintf(cli.out, "Containers: %d\n", remoteInfo.GetInt("Containers"))
-	fmt.Fprintf(cli.out, "Images: %d\n", remoteInfo.GetInt("Images"))
-	fmt.Fprintf(cli.out, "Storage Driver: %s\n", remoteInfo.Get("Driver"))
-	var driverStatus [][2]string
-	if err := remoteInfo.GetJson("DriverStatus", &driverStatus); err != nil {
-		return err
+	if remoteInfo.Exists("Containers") {
+		fmt.Fprintf(cli.out, "Containers: %d\n", remoteInfo.GetInt("Containers"))
 	}
-	for _, pair := range driverStatus {
-		fmt.Fprintf(cli.out, " %s: %s\n", pair[0], pair[1])
+	if remoteInfo.Exists("Images") {
+		fmt.Fprintf(cli.out, "Images: %d\n", remoteInfo.GetInt("Images"))
 	}
-	fmt.Fprintf(cli.out, "Execution Driver: %s\n", remoteInfo.Get("ExecutionDriver"))
-	fmt.Fprintf(cli.out, "Kernel Version: %s\n", remoteInfo.Get("KernelVersion"))
-	fmt.Fprintf(cli.out, "Operating System: %s\n", remoteInfo.Get("OperatingSystem"))
+	if remoteInfo.Exists("Driver") {
+		fmt.Fprintf(cli.out, "Storage Driver: %s\n", remoteInfo.Get("Driver"))
+	}
+	if remoteInfo.Exists("DriverStatus") {
+		var driverStatus [][2]string
+		if err := remoteInfo.GetJson("DriverStatus", &driverStatus); err != nil {
+			return err
+		}
+		for _, pair := range driverStatus {
+			fmt.Fprintf(cli.out, " %s: %s\n", pair[0], pair[1])
+		}
+	}
+	if remoteInfo.Exists("ExecutionDriver") {
+		fmt.Fprintf(cli.out, "Execution Driver: %s\n", remoteInfo.Get("ExecutionDriver"))
+	}
+	if remoteInfo.Exists("KernelVersion") {
+		fmt.Fprintf(cli.out, "Kernel Version: %s\n", remoteInfo.Get("KernelVersion"))
+	}
+	if remoteInfo.Exists("OperatingSystem") {
+		fmt.Fprintf(cli.out, "Operating System: %s\n", remoteInfo.Get("OperatingSystem"))
+	}
+	if remoteInfo.Exists("NCPU") {
+		fmt.Fprintf(cli.out, "CPUs: %d\n", remoteInfo.GetInt("NCPU"))
+	}
+	if remoteInfo.Exists("MemTotal") {
+		fmt.Fprintf(cli.out, "Total Memory: %s\n", units.BytesSize(float64(remoteInfo.GetInt64("MemTotal"))))
+	}
+	if remoteInfo.Exists("Name") {
+		fmt.Fprintf(cli.out, "Name: %s\n", remoteInfo.Get("Name"))
+	}
+	if remoteInfo.Exists("ID") {
+		fmt.Fprintf(cli.out, "ID: %s\n", remoteInfo.Get("ID"))
+	}
 
 	if remoteInfo.GetBool("Debug") || os.Getenv("DEBUG") != "" {
-		fmt.Fprintf(cli.out, "Debug mode (server): %v\n", remoteInfo.GetBool("Debug"))
+		if remoteInfo.Exists("Debug") {
+			fmt.Fprintf(cli.out, "Debug mode (server): %v\n", remoteInfo.GetBool("Debug"))
+		}
 		fmt.Fprintf(cli.out, "Debug mode (client): %v\n", os.Getenv("DEBUG") != "")
-		fmt.Fprintf(cli.out, "Fds: %d\n", remoteInfo.GetInt("NFd"))
-		fmt.Fprintf(cli.out, "Goroutines: %d\n", remoteInfo.GetInt("NGoroutines"))
-		fmt.Fprintf(cli.out, "EventsListeners: %d\n", remoteInfo.GetInt("NEventsListener"))
-
+		if remoteInfo.Exists("NFd") {
+			fmt.Fprintf(cli.out, "Fds: %d\n", remoteInfo.GetInt("NFd"))
+		}
+		if remoteInfo.Exists("NGoroutines") {
+			fmt.Fprintf(cli.out, "Goroutines: %d\n", remoteInfo.GetInt("NGoroutines"))
+		}
+		if remoteInfo.Exists("NEventsListener") {
+			fmt.Fprintf(cli.out, "EventsListeners: %d\n", remoteInfo.GetInt("NEventsListener"))
+		}
 		if initSha1 := remoteInfo.Get("InitSha1"); initSha1 != "" {
 			fmt.Fprintf(cli.out, "Init SHA1: %s\n", initSha1)
 		}
@@ -511,15 +560,22 @@ func (cli *DockerCli) CmdInfo(args ...string) error {
 			fmt.Fprintf(cli.out, "Registry: %v\n", remoteInfo.GetList("IndexServerAddress"))
 		}
 	}
-	if !remoteInfo.GetBool("MemoryLimit") {
+	if remoteInfo.Exists("MemoryLimit") && !remoteInfo.GetBool("MemoryLimit") {
 		fmt.Fprintf(cli.err, "WARNING: No memory limit support\n")
 	}
-	if !remoteInfo.GetBool("SwapLimit") {
+	if remoteInfo.Exists("SwapLimit") && !remoteInfo.GetBool("SwapLimit") {
 		fmt.Fprintf(cli.err, "WARNING: No swap limit support\n")
 	}
-	if !remoteInfo.GetBool("IPv4Forwarding") {
+	if remoteInfo.Exists("IPv4Forwarding") && !remoteInfo.GetBool("IPv4Forwarding") {
 		fmt.Fprintf(cli.err, "WARNING: IPv4 forwarding is disabled.\n")
 	}
+	if remoteInfo.Exists("Labels") {
+		fmt.Fprintln(cli.out, "Labels:")
+		for _, attribute := range remoteInfo.GetList("Labels") {
+			fmt.Fprintf(cli.out, " %s\n", attribute)
+		}
+	}
+
 	return nil
 }
 
@@ -582,7 +638,7 @@ func (cli *DockerCli) forwardAllSignals(cid string) chan os.Signal {
 	signal.CatchAll(sigc)
 	go func() {
 		for s := range sigc {
-			if s == syscall.SIGCHLD {
+			if s == signal.SIGCHLD {
 				continue
 			}
 			var sig string
@@ -593,7 +649,7 @@ func (cli *DockerCli) forwardAllSignals(cid string) chan os.Signal {
 				}
 			}
 			if sig == "" {
-				log.Errorf("Unsupported signal: %d. Discarding.", s)
+				log.Errorf("Unsupported signal: %v. Discarding.", s)
 			}
 			if _, _, err := readBody(cli.call("POST", fmt.Sprintf("/containers/%s/kill?signal=%s", cid, sig), nil, false)); err != nil {
 				log.Debugf("Error sending signal: %s", err)
@@ -620,6 +676,8 @@ func (cli *DockerCli) CmdStart(args ...string) error {
 		cmd.Usage()
 		return nil
 	}
+
+	hijacked := make(chan io.Closer)
 
 	if *attach || *openStdin {
 		if cmd.NArg() > 1 {
@@ -657,8 +715,24 @@ func (cli *DockerCli) CmdStart(args ...string) error {
 		v.Set("stderr", "1")
 
 		cErr = promise.Go(func() error {
-			return cli.hijack("POST", "/containers/"+cmd.Arg(0)+"/attach?"+v.Encode(), tty, in, cli.out, cli.err, nil, nil)
+			return cli.hijack("POST", "/containers/"+cmd.Arg(0)+"/attach?"+v.Encode(), tty, in, cli.out, cli.err, hijacked, nil)
 		})
+	} else {
+		close(hijacked)
+	}
+
+	// Acknowledge the hijack before starting
+	select {
+	case closer := <-hijacked:
+		// Make sure that the hijack gets closed when returning (results
+		// in closing the hijack chan and freeing server's goroutines)
+		if closer != nil {
+			defer closer.Close()
+		}
+	case err := <-cErr:
+		if err != nil {
+			return err
+		}
 	}
 
 	var encounteredError error
@@ -873,13 +947,13 @@ func (cli *DockerCli) CmdPort(args ...string) error {
 		return nil
 	}
 
-	steam, _, err := cli.call("GET", "/containers/"+cmd.Arg(0)+"/json", nil, false)
+	stream, _, err := cli.call("GET", "/containers/"+cmd.Arg(0)+"/json", nil, false)
 	if err != nil {
 		return err
 	}
 
 	env := engine.Env{}
-	if err := env.Decode(steam); err != nil {
+	if err := env.Decode(stream); err != nil {
 		return err
 	}
 	ports := nat.PortMap{}
@@ -1211,7 +1285,7 @@ func (cli *DockerCli) CmdPull(args ...string) error {
 	)
 	taglessRemote, tag := parsers.ParseRepositoryTag(remote)
 	if tag == "" && !*allTags {
-		newRemote = taglessRemote + ":latest"
+		newRemote = taglessRemote + ":" + graph.DEFAULTTAG
 	}
 	if tag != "" && *allTags {
 		return fmt.Errorf("tag can't be used with --all-tags/-a")
@@ -1287,6 +1361,12 @@ func (cli *DockerCli) CmdImages(args ...string) error {
 		imageFilterArgs, err = filters.ParseFlag(f, imageFilterArgs)
 		if err != nil {
 			return err
+		}
+	}
+
+	for name := range imageFilterArgs {
+		if _, ok := acceptedImageFilterTags[name]; !ok {
+			return fmt.Errorf("Invalid filter '%s'", name)
 		}
 	}
 
@@ -1499,7 +1579,7 @@ func (cli *DockerCli) CmdPs(args ...string) error {
 
 		cmd      = cli.Subcmd("ps", "", "List containers")
 		quiet    = cmd.Bool([]string{"q", "-quiet"}, false, "Only display numeric IDs")
-		size     = cmd.Bool([]string{"s", "-size"}, false, "Display sizes")
+		size     = cmd.Bool([]string{"s", "-size"}, false, "Display total file sizes")
 		all      = cmd.Bool([]string{"a", "-all"}, false, "Show all containers. Only running containers are shown by default.")
 		noTrunc  = cmd.Bool([]string{"#notrunc", "-no-trunc"}, false, "Don't truncate output")
 		nLatest  = cmd.Bool([]string{"l", "-latest"}, false, "Show only the latest created container, include non-running ones.")
@@ -1813,13 +1893,13 @@ func (cli *DockerCli) CmdLogs(args ...string) error {
 	}
 	name := cmd.Arg(0)
 
-	steam, _, err := cli.call("GET", "/containers/"+name+"/json", nil, false)
+	stream, _, err := cli.call("GET", "/containers/"+name+"/json", nil, false)
 	if err != nil {
 		return err
 	}
 
 	env := engine.Env{}
-	if err := env.Decode(steam); err != nil {
+	if err := env.Decode(stream); err != nil {
 		return err
 	}
 
@@ -1843,7 +1923,7 @@ func (cli *DockerCli) CmdAttach(args ...string) error {
 	var (
 		cmd     = cli.Subcmd("attach", "CONTAINER", "Attach to a running container")
 		noStdin = cmd.Bool([]string{"#nostdin", "-no-stdin"}, false, "Do not attach STDIN")
-		proxy   = cmd.Bool([]string{"#sig-proxy", "-sig-proxy"}, true, "Proxy all received signals to the process (even in non-TTY mode). SIGCHLD, SIGKILL, and SIGSTOP are not proxied.")
+		proxy   = cmd.Bool([]string{"#sig-proxy", "-sig-proxy"}, true, "Proxy all received signals to the process (non-TTY mode only). SIGCHLD, SIGKILL, and SIGSTOP are not proxied.")
 	)
 
 	if err := cmd.Parse(args); err != nil {
@@ -2010,7 +2090,7 @@ func (cli *DockerCli) pullImageCustomOut(image string, out io.Writer) error {
 	repos, tag := parsers.ParseRepositoryTag(image)
 	// pull only the image tagged 'latest' if no tag was specified
 	if tag == "" {
-		tag = "latest"
+		tag = graph.DEFAULTTAG
 	}
 	v.Set("fromImage", repos)
 	v.Set("tag", tag)
@@ -2099,7 +2179,11 @@ func (cli *DockerCli) createContainer(config *runconfig.Config, hostConfig *runc
 	stream, statusCode, err := cli.call("POST", "/containers/create?"+containerValues.Encode(), mergedConfig, false)
 	//if image not found try to pull it
 	if statusCode == 404 {
-		fmt.Fprintf(cli.err, "Unable to find image '%s' locally\n", config.Image)
+		repo, tag := parsers.ParseRepositoryTag(config.Image)
+		if tag == "" {
+			tag = graph.DEFAULTTAG
+		}
+		fmt.Fprintf(cli.err, "Unable to find image '%s:%s' locally\n", repo, tag)
 
 		// we don't want to write to stdout anything apart from container.ID
 		if err = cli.pullImageCustomOut(config.Image, cli.err); err != nil {
@@ -2140,7 +2224,7 @@ func (cli *DockerCli) CmdCreate(args ...string) error {
 		flName = cmd.String([]string{"-name"}, "", "Assign a name to the container")
 	)
 
-	config, hostConfig, cmd, err := runconfig.Parse(cmd, args, nil)
+	config, hostConfig, cmd, err := runconfig.Parse(cmd, args)
 	if err != nil {
 		return err
 	}
@@ -2167,7 +2251,7 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 	var (
 		flAutoRemove = cmd.Bool([]string{"#rm", "-rm"}, false, "Automatically remove the container when it exits (incompatible with -d)")
 		flDetach     = cmd.Bool([]string{"d", "-detach"}, false, "Detached mode: run the container in the background and print the new container ID")
-		flSigProxy   = cmd.Bool([]string{"#sig-proxy", "-sig-proxy"}, true, "Proxy received signals to the process (even in non-TTY mode). SIGCHLD, SIGSTOP, and SIGKILL are not proxied.")
+		flSigProxy   = cmd.Bool([]string{"#sig-proxy", "-sig-proxy"}, true, "Proxy received signals to the process (non-TTY mode only). SIGCHLD, SIGSTOP, and SIGKILL are not proxied.")
 		flName       = cmd.String([]string{"#name", "-name"}, "", "Assign a name to the container")
 		flAttach     *opts.ListOpts
 
@@ -2176,7 +2260,7 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 		ErrConflictDetachAutoRemove           = fmt.Errorf("Conflicting options: --rm and -d")
 	)
 
-	config, hostConfig, cmd, err := runconfig.Parse(cmd, args, nil)
+	config, hostConfig, cmd, err := runconfig.Parse(cmd, args)
 	if err != nil {
 		return err
 	}
@@ -2296,7 +2380,7 @@ func (cli *DockerCli) CmdRun(args ...string) error {
 	}
 
 	//start the container
-	if _, _, err = readBody(cli.call("POST", "/containers/"+runResult.Get("Id")+"/start", hostConfig, false)); err != nil {
+	if _, _, err = readBody(cli.call("POST", "/containers/"+runResult.Get("Id")+"/start", nil, false)); err != nil {
 		return err
 	}
 
@@ -2418,7 +2502,10 @@ func (cli *DockerCli) CmdSave(args ...string) error {
 		if err != nil {
 			return err
 		}
+	} else if cli.isTerminalOut {
+		return errors.New("Cowardly refusing to save to a terminal. Use the -o flag or redirect.")
 	}
+
 	if len(cmd.Args()) == 1 {
 		image := cmd.Arg(0)
 		if err := cli.stream("GET", "/images/"+image+"/get", nil, output, nil); err != nil {
@@ -2466,7 +2553,7 @@ func (cli *DockerCli) CmdLoad(args ...string) error {
 }
 
 func (cli *DockerCli) CmdExec(args ...string) error {
-	cmd := cli.Subcmd("exec", "CONTAINER COMMAND [ARG...]", "Run a command in an existing container")
+	cmd := cli.Subcmd("exec", "CONTAINER COMMAND [ARG...]", "Run a command in a running container")
 
 	execConfig, err := runconfig.ParseExec(cmd, args)
 	if err != nil {
@@ -2563,44 +2650,44 @@ func (cli *DockerCli) CmdExec(args ...string) error {
 	return nil
 }
 
-func (cli *DockerCli) CmdHosts(args ...string) error {
-	description := "Create and manage hosts running Docker on various providers.\n\nCommands:\n"
+func (cli *DockerCli) CmdMachines(args ...string) error {
+	description := "Create and manage machines running Docker on various providers.\n\nCommands:\n"
 	for _, command := range [][]string{
-		{"active", "Get or set the active host"},
-		{"create", "Create a host"},
-		{"inspect", "Inspect information about a host"},
-		{"ip", "Get the IP address of a host"},
-		{"kill", "Kill a host"},
-		{"ls", "List hosts (default)"},
-		{"restart", "Restart a host"},
-		{"rm", "Remove a host"},
-		{"ssh", "Log into or run a command on a host with SSH"},
-		{"start", "Start a host"},
-		{"stop", "Stop a host"},
-		{"upgrade", "Upgrade a host to the latest version of Docker"},
-		{"url", "Get the URL of a host"},
+		{"active", "Get or set the active machine"},
+		{"create", "Create a machine"},
+		{"inspect", "Inspect information about a machine"},
+		{"ip", "Get the IP address of a machine"},
+		{"kill", "Kill a machine"},
+		{"ls", "List machines (default)"},
+		{"restart", "Restart a machine"},
+		{"rm", "Remove a machine"},
+		{"ssh", "Log into or run a command on a machine with SSH"},
+		{"start", "Start a machine"},
+		{"stop", "Stop a machine"},
+		{"upgrade", "Upgrade a machine to the latest version of Docker"},
+		{"url", "Get the URL of a machine"},
 	} {
 		description += fmt.Sprintf("    %-10.10s%s\n", command[0], command[1])
 	}
 
-	description += "\nRun 'docker hosts COMMAND --help' for more information on a command."
+	description += "\nRun 'docker machines COMMAND --help' for more information on a command."
 
-	cmd := cli.Subcmd("hosts", "[COMMAND]", description)
+	cmd := cli.Subcmd("machines", "[COMMAND]", description)
 
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
 
 	if cmd.NArg() < 1 {
-		return cli.CmdHostsLs(args...)
+		return cli.CmdMachinesLs(args...)
 	}
 
 	cmd.Usage()
 	return nil
 }
 
-func (cli *DockerCli) CmdHostsLs(args ...string) error {
-	cmd := cli.Subcmd("hosts ls", "", "List hosts")
+func (cli *DockerCli) CmdMachinesLs(args ...string) error {
+	cmd := cli.Subcmd("machines ls", "", "List machines")
 	quiet := cmd.Bool([]string{"q", "-quiet"}, false, "Only display names")
 
 	if err := cmd.Parse(args); err != nil {
@@ -2667,11 +2754,11 @@ func (cli *DockerCli) CmdHostsLs(args ...string) error {
 	return nil
 }
 
-func (cli *DockerCli) CmdHostsCreate(args ...string) error {
-	cmd := cli.Subcmd("hosts create", "NAME", "Create hosts")
+func (cli *DockerCli) CmdMachinesCreate(args ...string) error {
+	cmd := cli.Subcmd("machines create", "NAME", "Create machines")
 
 	driverDesc := fmt.Sprintf(
-		"Driver to create host with. Available drivers: %s",
+		"Driver to create machine with. Available drivers: %s",
 		strings.Join(drivers.GetDriverNames(), ", "),
 	)
 
@@ -2699,12 +2786,12 @@ func (cli *DockerCli) CmdHostsCreate(args ...string) error {
 	if err := store.SetActive(host); err != nil {
 		return err
 	}
-	log.Infof("%q has been created and is now the active host. Docker commands will now run against that host.", name)
+	log.Infof("%q has been created and is now the active machine. Docker commands will now run against that machine.", name)
 	return nil
 }
 
-func (cli *DockerCli) CmdHostsStart(args ...string) error {
-	cmd := cli.Subcmd("hosts start", "NAME", "Start a host")
+func (cli *DockerCli) CmdMachinesStart(args ...string) error {
+	cmd := cli.Subcmd("machines start", "NAME", "Start a machine")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
@@ -2722,8 +2809,8 @@ func (cli *DockerCli) CmdHostsStart(args ...string) error {
 	return host.Start()
 }
 
-func (cli *DockerCli) CmdHostsStop(args ...string) error {
-	cmd := cli.Subcmd("hosts stop", "NAME", "Stop a host")
+func (cli *DockerCli) CmdMachinesStop(args ...string) error {
+	cmd := cli.Subcmd("machines stop", "NAME", "Stop a machine")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
@@ -2741,9 +2828,9 @@ func (cli *DockerCli) CmdHostsStop(args ...string) error {
 	return host.Stop()
 }
 
-func (cli *DockerCli) CmdHostsRm(args ...string) error {
-	cmd := cli.Subcmd("hosts rm", "NAME", "Remove a host")
-	force := cmd.Bool([]string{"f", "-force"}, false, "Remove local configuration even if host cannot be removed")
+func (cli *DockerCli) CmdMachinesRm(args ...string) error {
+	cmd := cli.Subcmd("machines rm", "NAME", "Remove a machine")
+	force := cmd.Bool([]string{"f", "-force"}, false, "Remove local configuration even if machine cannot be removed")
 
 	if err := cmd.Parse(args); err != nil {
 		return err
@@ -2759,18 +2846,18 @@ func (cli *DockerCli) CmdHostsRm(args ...string) error {
 	for _, host := range cmd.Args() {
 		host := host
 		if err := store.Remove(host, *force); err != nil {
-			log.Errorf("Error removing host %s: %s", host, err)
+			log.Errorf("Error removing machine %s: %s", host, err)
 			isError = true
 		}
 	}
 	if isError {
-		return fmt.Errorf("There was an error removing a host. To force remove it, pass the -f option. Warning: this might leave it running on the provider.")
+		return fmt.Errorf("There was an error removing a machine. To force remove it, pass the -f option. Warning: this might leave it running on the provider.")
 	}
 	return nil
 }
 
-func (cli *DockerCli) CmdHostsIp(args ...string) error {
-	cmd := cli.Subcmd("hosts ip", "NAME", "Get the IP address of a host")
+func (cli *DockerCli) CmdMachinesIp(args ...string) error {
+	cmd := cli.Subcmd("machines ip", "NAME", "Get the IP address of a machine")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
@@ -2795,8 +2882,8 @@ func (cli *DockerCli) CmdHostsIp(args ...string) error {
 	return nil
 }
 
-func (cli *DockerCli) CmdHostsUrl(args ...string) error {
-	cmd := cli.Subcmd("hosts url", "NAME", "Get the URL of a host")
+func (cli *DockerCli) CmdMachinesUrl(args ...string) error {
+	cmd := cli.Subcmd("machines url", "NAME", "Get the URL of a machine")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
@@ -2821,8 +2908,8 @@ func (cli *DockerCli) CmdHostsUrl(args ...string) error {
 	return nil
 }
 
-func (cli *DockerCli) CmdHostsRestart(args ...string) error {
-	cmd := cli.Subcmd("hosts restart", "NAME", "Restart a host")
+func (cli *DockerCli) CmdMachinesRestart(args ...string) error {
+	cmd := cli.Subcmd("machines restart", "NAME", "Restart a machine")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
@@ -2840,8 +2927,8 @@ func (cli *DockerCli) CmdHostsRestart(args ...string) error {
 	return host.Driver.Restart()
 }
 
-func (cli *DockerCli) CmdHostsKill(args ...string) error {
-	cmd := cli.Subcmd("hosts kill", "NAME", "Kill a host")
+func (cli *DockerCli) CmdMachinesKill(args ...string) error {
+	cmd := cli.Subcmd("machines kill", "NAME", "Kill a machine")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
@@ -2859,8 +2946,8 @@ func (cli *DockerCli) CmdHostsKill(args ...string) error {
 	return host.Driver.Kill()
 }
 
-func (cli *DockerCli) CmdHostsSsh(args ...string) error {
-	cmd := cli.Subcmd("hosts ssh", "NAME [COMMAND ...]", "Log into or run a command on a host with SSH")
+func (cli *DockerCli) CmdMachinesSsh(args ...string) error {
+	cmd := cli.Subcmd("machines ssh", "NAME [COMMAND ...]", "Log into or run a command on a machine with SSH")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
@@ -2895,8 +2982,8 @@ func (cli *DockerCli) CmdHostsSsh(args ...string) error {
 	return nil
 }
 
-func (cli *DockerCli) CmdHostsActive(args ...string) error {
-	cmd := cli.Subcmd("active", "[NAME]", "Get or set the active host")
+func (cli *DockerCli) CmdMachinesActive(args ...string) error {
+	cmd := cli.Subcmd("machines active", "[NAME]", "Get or set the active machine")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
@@ -2927,8 +3014,8 @@ func (cli *DockerCli) CmdHostsActive(args ...string) error {
 
 }
 
-func (cli *DockerCli) CmdHostsInspect(args ...string) error {
-	cmd := cli.Subcmd("active", "[NAME]", "Get or set the active host")
+func (cli *DockerCli) CmdMachinesInspect(args ...string) error {
+	cmd := cli.Subcmd("machines inspect", "[NAME]", "Get detailed information about a machine")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}
@@ -2954,8 +3041,8 @@ func (cli *DockerCli) CmdHostsInspect(args ...string) error {
 	return nil
 }
 
-func (cli *DockerCli) CmdHostsUpgrade(args ...string) error {
-	cmd := cli.Subcmd("upgrade", "[NAME]", "Upgrade a host to the latest version of Docker")
+func (cli *DockerCli) CmdMachinesUpgrade(args ...string) error {
+	cmd := cli.Subcmd("machines upgrade", "[NAME]", "Upgrade a machine to the latest version of Docker")
 	if err := cmd.Parse(args); err != nil {
 		return err
 	}

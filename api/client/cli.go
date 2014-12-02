@@ -1,7 +1,6 @@
 package client
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,8 +23,6 @@ type DockerCli struct {
 	out        io.Writer
 	err        io.Writer
 	key        libtrust.PrivateKey
-	tlsConfig  *tls.Config
-	scheme     string
 	// inFd holds file descriptor of the client's STDIN, if it's a valid file
 	inFd uintptr
 	// outFd holds file descriptor of the client's STDOUT, if it's a valid file
@@ -73,11 +70,11 @@ func (cli *DockerCli) Cmd(args ...string) error {
 		method, exists := cli.getMethod(args[0])
 		if !exists {
 			fmt.Println("Error: Command not found:", args[0])
-			return cli.CmdHelp(args[1:]...)
+			return cli.CmdHelp()
 		}
 		return method(args[1:]...)
 	}
-	return cli.CmdHelp(args...)
+	return cli.CmdHelp()
 }
 
 func (cli *DockerCli) Subcmd(name, signature, description string) *flag.FlagSet {
@@ -102,18 +99,13 @@ func (cli *DockerCli) LoadConfigFile() (err error) {
 	return err
 }
 
-func NewDockerCli(in io.ReadCloser, out, err io.Writer, key libtrust.PrivateKey, host *hosts.Host, tlsConfig *tls.Config) *DockerCli {
+func NewDockerCli(in io.ReadCloser, out, err io.Writer, key libtrust.PrivateKey, host *hosts.Host) *DockerCli {
 	var (
 		inFd          uintptr
 		outFd         uintptr
 		isTerminalIn  = false
 		isTerminalOut = false
-		scheme        = "http"
 	)
-
-	if tlsConfig != nil {
-		scheme = "https"
-	}
 
 	if in != nil {
 		if file, ok := in.(*os.File); ok {
@@ -142,8 +134,6 @@ func NewDockerCli(in io.ReadCloser, out, err io.Writer, key libtrust.PrivateKey,
 		outFd:         outFd,
 		isTerminalIn:  isTerminalIn,
 		isTerminalOut: isTerminalOut,
-		tlsConfig:     tlsConfig,
-		scheme:        scheme,
 		host:          host,
 	}
 }

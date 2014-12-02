@@ -13,10 +13,10 @@ import (
 	azure "github.com/MSOpenTech/azure-sdk-for-go"
 	"github.com/MSOpenTech/azure-sdk-for-go/clients/vmClient"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/hosts/drivers"
 	"github.com/docker/docker/hosts/ssh"
 	"github.com/docker/docker/hosts/state"
-	"github.com/docker/docker/pkg/log"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/utils"
 )
@@ -320,18 +320,23 @@ func (driver *Driver) Remove() error {
 		return err
 	}
 
-	available, _, err := vmClient.CheckHostedServiceNameAvailability(driver.Name)
+	_, err = vmClient.GetVMDeployment(driver.Name, driver.Name)
 	if err != nil {
+		if strings.Contains(err.Error(), "Code: ResourceNotFound") {
+			return nil
+		}
+
 		return err
 	}
-	if available {
-		return nil
+
+	err = vmClient.DeleteVMDeployment(driver.Name, driver.Name)
+	if err != nil {
+		return err
 	}
 	err = vmClient.DeleteHostedService(driver.Name)
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 

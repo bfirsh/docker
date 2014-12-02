@@ -23,12 +23,14 @@ docker-run - Run a command in a new container
 [**--expose**[=*[]*]]
 [**-h**|**--hostname**[=*HOSTNAME*]]
 [**-i**|**--interactive**[=*false*]]
+[**--ipc**[=*[]*]]
 [**--security-opt**[=*[]*]]
 [**--link**[=*[]*]]
 [**--lxc-conf**[=*[]*]]
 [**-m**|**--memory**[=*MEMORY*]]
 [**--name**[=*NAME*]]
 [**--net**[=*"bridge"*]]
+[**--mac-address**[=*MACADDRESS*]]
 [**-P**|**--publish-all**[=*false*]]
 [**-p**|**--publish**[=*[]*]]
 [**--privileged**[=*false*]]
@@ -103,7 +105,7 @@ stopping the process by pressing the keys CTRL-P CTRL-Q.
    Add a host device to the container (e.g. --device=/dev/sdc:/dev/xvdc:rwm)
 
 **--dns-search**=[]
-   Set custom DNS search domains
+   Set custom DNS search domains (Use --dns-search=. if you don't wish to set the search domain)
 
 **--dns**=*IP-address*
    Set custom DNS servers. This option can be used to override the DNS
@@ -132,18 +134,20 @@ ENTRYPOINT.
 **--env-file**=[]
    Read in a line delimited file of environment variables
 
-**--expose**=*port*
-   Expose a port from the container without publishing it to your host. A
-containers port can be exposed to other containers in three ways: 1) The
-developer can expose the port using the EXPOSE parameter of the Dockerfile, 2)
-the operator can use the **--expose** option with **docker run**, or 3) the
-container can be started with the **--link**.
+**--expose**=[]
+   Expose a port or a range of ports (e.g. --expose=3300-3310) from the container without publishing it to your host
 
 **-h**, **--hostname**=*hostname*
    Sets the container host name that is available inside the container.
 
 **-i**, **--interactive**=*true*|*false*
    When set to true, keep stdin open even if not attached. The default is false.
+
+**--ipc**=[]
+   Set the IPC mode for the container
+     **container**:<*name*|*id*>: reuses another container's IPC stack
+     **host**: use the host's IPC stack inside the container.  
+     Note: the host mode gives the container full access to local IPC and is therefore considered insecure.
 
 **--security-opt**=*secdriver*:*name*:*value*
     "label:user:USER"   : Set the label user for the container
@@ -186,17 +190,26 @@ and foreground Docker containers.
 
 **--net**="bridge"
    Set the Network mode for the container
-                               'bridge': creates a new network stack for the container on the docker bridge
-                               'none': no networking for this container
-                               'container:<name|id>': reuses another container network stack
-                               'host': use the host network stack inside the container.  Note: the host mode gives the container full access to local system services such as D-bus and is therefore considered insecure.
+   **bridge**: creates a new network stack for the container on the docker bridge
+   **none**: no networking for this container
+   **container**:<*name*|*id*>: reuses another container's network stack
+   **host**: use the host network stack inside the container.  
+   Note: the host mode gives the container full access to local system services such as D-bus and is therefore considered insecure.
+
+**--mac-address**=*macaddress*
+   Set the MAC address for the container's Ethernet device:
+    --mac-address=12:34:56:78:9a:bc
+
+Remember that the MAC address in an Ethernet network must be unique.
+The IPv6 link-local address will be based on the device's MAC address
+according to RFC4862.
 
 **-P**, **--publish-all**=*true*|*false*
    When set to true publish all exposed ports to the host interfaces. The
 default is false. If the operator uses -P (or -p) then Docker will make the
 exposed port accessible on the host and the ports will be available to any
-client that can reach the host. When using -P, Docker will bind the exposed 
-ports to a random port on the host between 49153 and 65535. To find the 
+client that can reach the host. When using -P, Docker will bind the exposed
+ports to a random port on the host between 49153 and 65535. To find the
 mapping between the host ports and the exposed ports, use **docker port**.
 
 **-p**, **--publish**=[]
@@ -220,7 +233,7 @@ outside of a container on the host.
    Automatically remove the container when it exits (incompatible with -d). The default is *false*.
 
 **--sig-proxy**=*true*|*false*
-   Proxy received signals to the process (even in non-TTY mode). SIGCHLD, SIGSTOP, and SIGKILL are not proxied. The default is *true*.
+   Proxy received signals to the process (non-TTY mode only). SIGCHLD, SIGSTOP, and SIGKILL are not proxied. The default is *true*.
 
 **-t**, **--tty**=*true*|*false*
    When set to true Docker can allocate a pseudo-tty and attach to the standard
@@ -232,11 +245,11 @@ interactive shell. The default is value is false.
 
 
 **-v**, **--volume**=*volume*[:ro|:rw]
-   Bind mount a volume to the container. 
+   Bind mount a volume to the container.
 
 The **-v** option can be used one or
 more times to add one or more mounts to a container. These mounts can then be
-used in other containers using the **--volumes-from** option. 
+used in other containers using the **--volumes-from** option.
 
 The volume may be optionally suffixed with :ro or :rw to mount the volumes in
 read-only or read-write mode, respectively. By default, the volumes are mounted
@@ -247,11 +260,11 @@ read-write. See examples.
 Once a volume is mounted in a one container it can be shared with other
 containers using the **--volumes-from** option when running those other
 containers. The volumes can be shared even if the original container with the
-mount is not running. 
+mount is not running.
 
-The container ID may be optionally suffixed with :ro or 
-:rw to mount the volumes in read-only or read-write mode, respectively. By 
-default, the volumes are mounted in the same mode (read write or read only) as 
+The container ID may be optionally suffixed with :ro or
+:rw to mount the volumes in read-only or read-write mode, respectively. By
+default, the volumes are mounted in the same mode (read write or read only) as
 the reference container.
 
 
@@ -304,6 +317,71 @@ If you do not specify -a then Docker will attach everything (stdin,stdout,stderr
 you’d like to connect instead, as in:
 
     # docker run -a stdin -a stdout -i -t fedora /bin/bash
+
+## Sharing IPC between containers
+
+Using shm_server.c available here: http://www.cs.cf.ac.uk/Dave/C/node27.html
+
+Testing `--ipc=host` mode:
+
+Host shows a shared memory segment with 7 pids attached, happens to be from httpd:
+
+```
+ $ sudo ipcs -m
+
+ ------ Shared Memory Segments --------
+ key        shmid      owner      perms      bytes      nattch     status      
+ 0x01128e25 0          root       600        1000       7                       
+```
+
+Now run a regular container, and it correctly does NOT see the shared memory segment from the host:
+
+```
+ $ sudo docker run -it shm ipcs -m
+
+ ------ Shared Memory Segments --------	
+ key        shmid      owner      perms      bytes      nattch     status      
+```
+
+Run a container with the new `--ipc=host` option, and it now sees the shared memory segment from the host httpd:
+
+ ```
+ $ sudo docker run -it --ipc=host shm ipcs -m
+
+ ------ Shared Memory Segments --------
+ key        shmid      owner      perms      bytes      nattch     status      
+ 0x01128e25 0          root       600        1000       7                   
+```
+Testing `--ipc=container:CONTAINERID` mode:
+
+Start a container with a program to create a shared memory segment:
+```
+ sudo docker run -it shm bash
+ $ sudo shm/shm_server &
+ $ sudo ipcs -m
+
+ ------ Shared Memory Segments --------
+ key        shmid      owner      perms      bytes      nattch     status      
+ 0x0000162e 0          root       666        27         1                       
+```
+Create a 2nd container correctly shows no shared memory segment from 1st container:
+```
+ $ sudo docker run shm ipcs -m
+
+ ------ Shared Memory Segments --------
+ key        shmid      owner      perms      bytes      nattch     status      
+```
+
+Create a 3rd container using the new --ipc=container:CONTAINERID option, now it shows the shared memory segment from the first:
+
+```
+ $ sudo docker run -it --ipc=container:ed735b2264ac shm ipcs -m
+ $ sudo ipcs -m
+
+ ------ Shared Memory Segments --------
+ key        shmid      owner      perms      bytes      nattch     status      
+ 0x0000162e 0          root       666        27         1
+```
 
 ## Linking Containers
 

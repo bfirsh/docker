@@ -3,6 +3,7 @@
 package main
 
 import (
+	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/builtins"
 	"github.com/docker/docker/daemon"
@@ -10,9 +11,9 @@ import (
 	_ "github.com/docker/docker/daemon/execdriver/native"
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/engine"
-	"github.com/docker/docker/pkg/log"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/signal"
+	"github.com/docker/docker/registry"
 )
 
 const CanDaemon = true
@@ -32,8 +33,16 @@ func mainDaemon() {
 	}
 	eng := engine.New()
 	signal.Trap(eng.Shutdown)
+
+	daemonCfg.TrustKeyPath = *flTrustKey
+
 	// Load builtins
 	if err := builtins.Register(eng); err != nil {
+		log.Fatal(err)
+	}
+
+	// load registry service
+	if err := registry.NewService(daemonCfg.InsecureRegistries).Install(eng); err != nil {
 		log.Fatal(err)
 	}
 
@@ -45,6 +54,13 @@ func mainDaemon() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		log.Infof("docker daemon: %s %s; execdriver: %s; graphdriver: %s",
+			dockerversion.VERSION,
+			dockerversion.GITCOMMIT,
+			d.ExecutionDriver().Name(),
+			d.GraphDriver().String(),
+		)
+
 		if err := d.Install(eng); err != nil {
 			log.Fatal(err)
 		}
@@ -58,13 +74,6 @@ func mainDaemon() {
 			log.Fatal(err)
 		}
 	}()
-	// TODO actually have a resolved graphdriver to show?
-	log.Infof("docker daemon: %s %s; execdriver: %s; graphdriver: %s",
-		dockerversion.VERSION,
-		dockerversion.GITCOMMIT,
-		daemonCfg.ExecDriver,
-		daemonCfg.GraphDriver,
-	)
 
 	// Serve api
 	job := eng.Job("serveapi", flHosts...)
@@ -73,11 +82,12 @@ func mainDaemon() {
 	job.Setenv("Version", dockerversion.VERSION)
 	job.Setenv("SocketGroup", *flSocketGroup)
 
-	job.SetenvBool("Tls", *flTls)
-	job.SetenvBool("TlsVerify", *flTlsVerify)
-	job.Setenv("TlsCa", *flCa)
-	job.Setenv("TlsCert", *flCert)
-	job.Setenv("TlsKey", *flKey)
+	job.Setenv("Auth", *flAuth)
+	job.Setenv("AuthCa", *flAuthCa)
+	job.Setenv("AuthCert", *flAuthCert)
+	job.Setenv("AuthKey", *flAuthKey)
+	job.Setenv("TrustKey", *flTrustKey)
+	job.Setenv("TrustDir", *flTrustDir)
 	job.SetenvBool("BufferRequests", true)
 	if err := job.Run(); err != nil {
 		log.Fatal(err)

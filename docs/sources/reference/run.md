@@ -50,6 +50,7 @@ following options.
  - [Container Identification](#container-identification)
      - [Name (--name)](#name-name)
      - [PID Equivalent](#pid-equivalent)
+ - [IPC Settings](#ipc-settings)
  - [Network Settings](#network-settings)
  - [Clean Up (--rm)](#clean-up-rm)
  - [Runtime Constraints on CPU and Memory](#runtime-constraints-on-cpu-and-memory)
@@ -82,7 +83,7 @@ and pass along signals. All of that is configurable:
 
     -a=[]           : Attach to `STDIN`, `STDOUT` and/or `STDERR`
     -t=false        : Allocate a pseudo-tty
-    --sig-proxy=true: Proxify all received signal to the process (even in non-tty mode)
+    --sig-proxy=true: Proxify all received signal to the process (non-TTY mode only)
     -i=false        : Keep STDIN open even if not attached
 
 If you do not specify `-a` then Docker will [attach all standard
@@ -99,7 +100,7 @@ together in most interactive cases.
 
 ## Container identification
 
-### Name (–-name)
+### Name (--name)
 
 The operator can identify a container in three ways:
 
@@ -131,15 +132,32 @@ While not strictly a means of identifying a container, you can specify a version
 image you'd like to run the container with by adding `image[:tag]` to the command. For
 example, `docker run ubuntu:14.04`.
 
+## IPC Settings
+    --ipc=""  : Set the IPC mode for the container,
+                                 'container:<name|id>': reuses another container's IPC namespace
+                                 'host': use the host's IPC namespace inside the container
+By default, all containers have the IPC namespace enabled 
+
+IPC (POSIX/SysV IPC) namespace provides separation of named shared memory segments, semaphores and message queues.  
+
+Shared memory segments are used to accelerate inter-process communication at
+memory speed, rather than through pipes or through the network stack. Shared
+memory is commonly used by databases and custom-built (typically C/OpenMPI, 
+C++/using boost libraries) high performance applications for scientific
+computing and financial services industries. If these types of applications
+are broken into multiple containers, you might need to share the IPC mechanisms
+of the containers.
+
 ## Network settings
 
-    --dns=[]        : Set custom dns servers for the container
-    --net="bridge"  : Set the Network mode for the container
-                                 'bridge': creates a new network stack for the container on the docker bridge
-                                 'none': no networking for this container
-                                 'container:<name|id>': reuses another container network stack
-                                 'host': use the host network stack inside the container
-    --add-host=""   : Add a line to /etc/hosts (host:IP)
+    --dns=[]         : Set custom dns servers for the container
+    --net="bridge"   : Set the Network mode for the container
+                                  'bridge': creates a new network stack for the container on the docker bridge
+                                  'none': no networking for this container
+                                  'container:<name|id>': reuses another container network stack
+                                  'host': use the host network stack inside the container
+    --add-host=""    : Add a line to /etc/hosts (host:IP)
+    --mac-address="" : Sets the container's Ethernet device's MAC address
 
 By default, all containers have networking enabled and they can make any
 outgoing connections. The operator can completely disable networking
@@ -149,6 +167,10 @@ networking. In cases like this, you would perform I/O through files or
 
 Your container will use the same DNS servers as the host by default, but
 you can override this with `--dns`.
+
+By default a random MAC is generated. You can set the container's MAC address
+explicitly by providing a MAC via the `--mac-address` parameter (format:
+`12:34:56:78:9a:bc`).
 
 Supported networking modes are:
 
@@ -213,7 +235,7 @@ container itself as well as `localhost` and a few other common things.  The
     ::1	            localhost ip6-localhost ip6-loopback
     86.75.30.9      db-static
 
-## Clean up (–-rm)
+## Clean up (--rm)
 
 By default a container's file system persists even after the container
 exits. This makes debugging a lot easier (since you can inspect the
@@ -413,7 +435,7 @@ the `EXPOSE` instruction to give a hint to the operator about what
 incoming ports might provide services. The following options work with
 or override the Dockerfile's exposed defaults:
 
-    --expose=[]: Expose a port from the container
+    --expose=[]: Expose a port or a range of ports from the container
                 without publishing it to your host
     -P=false   : Publish all exposed ports to the host interfaces
     -p=[]      : Publish a container᾿s port to the host (format:
@@ -422,7 +444,7 @@ or override the Dockerfile's exposed defaults:
                  (use 'docker port' to see the actual mapping)
     --link=""  : Add link to another container (name:alias)
 
-As mentioned previously, `EXPOSE` (and `--expose`) make a port available
+As mentioned previously, `EXPOSE` (and `--expose`) makes ports available
 **in** a container for incoming connections. The port number on the
 inside of the container (where the service listens) does not need to be
 the same number as the port exposed on the outside of the container

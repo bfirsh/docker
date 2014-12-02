@@ -12,11 +12,11 @@ import (
 	"syscall"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/daemon/graphdriver"
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/log"
 	"github.com/docker/docker/pkg/truncindex"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/utils"
@@ -132,14 +132,14 @@ func (graph *Graph) Create(layerData archive.ArchiveReader, containerID, contain
 		img.ContainerConfig = *containerConfig
 	}
 
-	if err := graph.Register(img, nil, layerData); err != nil {
+	if err := graph.Register(img, layerData); err != nil {
 		return nil, err
 	}
 	return img, nil
 }
 
 // Register imports a pre-existing image into the graph.
-func (graph *Graph) Register(img *image.Image, jsonData []byte, layerData archive.ArchiveReader) (err error) {
+func (graph *Graph) Register(img *image.Image, layerData archive.ArchiveReader) (err error) {
 	defer func() {
 		// If any error occurs, remove the new dir from the driver.
 		// Don't check for errors since the dir might not have been created.
@@ -181,7 +181,7 @@ func (graph *Graph) Register(img *image.Image, jsonData []byte, layerData archiv
 	}
 	// Apply the diff/layer
 	img.SetGraph(graph)
-	if err := image.StoreImage(img, jsonData, layerData, tmp); err != nil {
+	if err := image.StoreImage(img, layerData, tmp); err != nil {
 		return err
 	}
 	// Commit

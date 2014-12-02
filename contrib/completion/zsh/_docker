@@ -177,7 +177,9 @@ __docker_commands () {
     if ( [[ ${+_docker_subcommands} -eq 0 ]] || _cache_invalid docker_subcommands) \
         && ! _retrieve_cache docker_subcommands;
     then
-        _docker_subcommands=(${${${${(f)"$(_call_program commands docker 2>&1)"}[5,-1]}## #}/ ##/:})
+        local -a lines
+        lines=(${(f)"$(_call_program commands docker 2>&1)"})
+        _docker_subcommands=(${${${lines[$((${lines[(i)Commands:]} + 1)),${lines[(I)    *]}]}## #}/ ##/:})
         _docker_subcommands=($_docker_subcommands 'help:Show help for a command')
         _store_cache docker_subcommands _docker_subcommands
     fi
@@ -190,7 +192,7 @@ __docker_subcommand () {
         (attach)
             _arguments \
                 '--no-stdin[Do not attach stdin]' \
-                '--sig-proxy[Proxify all received signal]' \
+                '--sig-proxy[Proxy all received signals to the process (non-TTY mode only)]' \
                 ':containers:__docker_runningcontainers'
             ;;
         (build)
@@ -357,7 +359,7 @@ __docker_subcommand () {
                 '-n[Show n last created containers, include non-running one]:n:(1 5 10 25 50)' \
                 '--no-trunc[Do not truncate output]' \
                 {-q,--quiet}'[Only show numeric IDs]' \
-                {-s,--size}'[Display sizes]' \
+                {-s,--size}'[Display total file sizes]' \
                 '--since=-[Show only containers created since...]:containers:__docker_containers'
             ;;
         (tag)
@@ -396,7 +398,7 @@ __docker_subcommand () {
                 '--restart=-[Restart policy]:restart policy:(no on-failure always)' \
                 '--rm[Remove intermediate containers when it exits]' \
                 '*--security-opt=-[Security options]:security option: ' \
-                '--sig-proxy[Proxify all received signal]' \
+                '--sig-proxy[Proxy all received signals to the process (non-TTY mode only)]' \
                 {-t,--tty}'[Allocate a pseudo-tty]' \
                 {-u,--user=-}'[Username or UID]:user:_users' \
                 '*-v[Bind mount a volume]:volume: '\

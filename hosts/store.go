@@ -6,7 +6,7 @@ import (
 	"os"
 	"path"
 
-	"github.com/docker/docker/pkg/log"
+	log "github.com/Sirupsen/logrus"
 	homedir "github.com/mitchellh/go-homedir"
 )
 

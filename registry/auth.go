@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -27,7 +28,16 @@ const (
 
 var (
 	ErrConfigFileMissing = errors.New("The Auth config file is missing")
+	IndexServerURL       *url.URL
 )
+
+func init() {
+	url, err := url.Parse(INDEXSERVER)
+	if err != nil {
+		panic(err)
+	}
+	IndexServerURL = url
+}
 
 type AuthConfig struct {
 	Username      string `json:"username,omitempty"`
@@ -116,8 +126,8 @@ func LoadConfig(rootPath string) (*ConfigFile, error) {
 				return &configFile, err
 			}
 			authConfig.Auth = ""
-			configFile.Configs[k] = authConfig
 			authConfig.ServerAddress = k
+			configFile.Configs[k] = authConfig
 		}
 	}
 	return &configFile, nil
@@ -219,7 +229,7 @@ func Login(authConfig *AuthConfig, factory *utils.HTTPRequestFactory) (string, e
 				return "", err
 			}
 			if resp.StatusCode == 200 {
-				status = "Login Succeeded"
+				return "Login Succeeded", nil
 			} else if resp.StatusCode == 401 {
 				return "", fmt.Errorf("Wrong login/password, please try again")
 			} else if resp.StatusCode == 403 {
@@ -247,7 +257,7 @@ func Login(authConfig *AuthConfig, factory *utils.HTTPRequestFactory) (string, e
 			return "", err
 		}
 		if resp.StatusCode == 200 {
-			status = "Login Succeeded"
+			return "Login Succeeded", nil
 		} else if resp.StatusCode == 401 {
 			return "", fmt.Errorf("Wrong login/password, please try again")
 		} else {

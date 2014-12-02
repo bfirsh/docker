@@ -11,17 +11,17 @@ import (
 	"runtime"
 	"strings"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/dockerversion"
-	"github.com/docker/docker/pkg/log"
 	"github.com/docker/docker/pkg/promise"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/docker/pkg/term"
 )
 
-func (cli *DockerCli) dial(proto string, addr string) (net.Conn, error) {
-	if cli.tlsConfig != nil && proto != "unix" {
-		return tls.Dial(proto, addr, cli.tlsConfig)
+func (cli *DockerCli) dial(proto, addr string, tlsConfig *tls.Config) (net.Conn, error) {
+	if tlsConfig != nil && proto != "unix" {
+		return tls.Dial(proto, addr, tlsConfig)
 	}
 	return net.Dial(proto, addr)
 }
@@ -33,7 +33,7 @@ func (cli *DockerCli) hijack(method, path string, setRawTerminal bool, in io.Rea
 		}
 	}()
 
-	proto, addr, err := cli.host.GetProtoAddr()
+	proto, addr, tlsConfig, err := cli.host.GetConnectionDetails()
 	if err != nil {
 		return err
 	}
@@ -50,7 +50,7 @@ func (cli *DockerCli) hijack(method, path string, setRawTerminal bool, in io.Rea
 	req.Header.Set("Content-Type", "plain/text")
 	req.Host = addr
 
-	dial, err := cli.dial(proto, addr)
+	dial, err := cli.dial(proto, addr, tlsConfig)
 	if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			return fmt.Errorf("Cannot connect to the Docker daemon. Is 'docker -d' running on this host?")

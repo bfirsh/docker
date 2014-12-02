@@ -87,9 +87,10 @@ func parseLine(line string) (string, *Node, error) {
 
 	if sexp.Value != "" || sexp.Next != nil || sexp.Children != nil {
 		node.Next = sexp
-		node.Attributes = attrs
-		node.Original = line
 	}
+
+	node.Attributes = attrs
+	node.Original = line
 
 	return "", node, nil
 }
@@ -102,10 +103,6 @@ func Parse(rwc io.Reader) (*Node, error) {
 
 	for scanner.Scan() {
 		scannedLine := strings.TrimLeftFunc(scanner.Text(), unicode.IsSpace)
-		if stripComments(scannedLine) == "" {
-			continue
-		}
-
 		line, child, err := parseLine(scannedLine)
 		if err != nil {
 			return nil, err
@@ -126,6 +123,12 @@ func Parse(rwc io.Reader) (*Node, error) {
 
 				if child != nil {
 					break
+				}
+			}
+			if child == nil && line != "" {
+				line, child, err = parseLine(line)
+				if err != nil {
+					return nil, err
 				}
 			}
 		}

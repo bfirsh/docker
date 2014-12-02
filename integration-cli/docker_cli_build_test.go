@@ -2,18 +2,327 @@ package main
 
 import (
 	"archive/tar"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/docker/docker/pkg/archive"
 )
+
+func TestBuildShCmdJSONEntrypoint(t *testing.T) {
+	name := "testbuildshcmdjsonentrypoint"
+	defer deleteImages(name)
+
+	_, err := buildImage(
+		name,
+		`
+    FROM busybox
+    ENTRYPOINT ["/bin/echo"]
+    CMD echo test
+    `,
+		true)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := runCommandWithOutput(
+		exec.Command(
+			dockerBinary,
+			"run",
+			"--rm",
+			name))
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.TrimSpace(out) != "/bin/sh -c echo test" {
+		t.Fatal("CMD did not contain /bin/sh -c")
+	}
+
+	logDone("build - CMD should always contain /bin/sh -c when specified without JSON")
+}
+
+func TestBuildEnvironmentReplacementUser(t *testing.T) {
+	name := "testbuildenvironmentreplacement"
+	defer deleteImages(name)
+
+	_, err := buildImage(name, `
+  FROM scratch
+  ENV user foo
+  USER ${user}
+  `, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := inspectFieldJSON(name, "Config.User")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res != `"foo"` {
+		t.Fatal("User foo from environment not in Config.User on image")
+	}
+
+	logDone("build - user environment replacement")
+}
+
+func TestBuildEnvironmentReplacementVolume(t *testing.T) {
+	name := "testbuildenvironmentreplacement"
+	defer deleteImages(name)
+
+	_, err := buildImage(name, `
+  FROM scratch
+  ENV volume /quux
+  VOLUME ${volume}
+  `, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := inspectFieldJSON(name, "Config.Volumes")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var volumes map[string]interface{}
+
+	if err := json.Unmarshal([]byte(res), &volumes); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := volumes["/quux"]; !ok {
+		t.Fatal("Volume /quux from environment not in Config.Volumes on image")
+	}
+
+	logDone("build - volume environment replacement")
+}
+
+func TestBuildEnvironmentReplacementExpose(t *testing.T) {
+	name := "testbuildenvironmentreplacement"
+	defer deleteImages(name)
+
+	_, err := buildImage(name, `
+  FROM scratch
+  ENV port 80
+  EXPOSE ${port}
+  `, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := inspectFieldJSON(name, "Config.ExposedPorts")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var exposedPorts map[string]interface{}
+
+	if err := json.Unmarshal([]byte(res), &exposedPorts); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := exposedPorts["80/tcp"]; !ok {
+		t.Fatal("Exposed port 80 from environment not in Config.ExposedPorts on image")
+	}
+
+	logDone("build - expose environment replacement")
+}
+
+func TestBuildEnvironmentReplacementWorkdir(t *testing.T) {
+	name := "testbuildenvironmentreplacement"
+	defer deleteImages(name)
+
+	_, err := buildImage(name, `
+  FROM busybox
+  ENV MYWORKDIR /work
+  RUN mkdir ${MYWORKDIR}
+  WORKDIR ${MYWORKDIR}
+  `, true)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logDone("build - workdir environment replacement")
+}
+
+func TestBuildEnvironmentReplacementAddCopy(t *testing.T) {
+	name := "testbuildenvironmentreplacement"
+	defer deleteImages(name)
+
+	ctx, err := fakeContext(`
+  FROM scratch
+  ENV baz foo
+  ENV quux bar
+  ENV dot .
+
+  ADD ${baz} ${dot}
+  COPY ${quux} ${dot}
+  `,
+		map[string]string{
+			"foo": "test1",
+			"bar": "test2",
+		})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx.Close()
+
+	if _, err := buildImageFromContext(name, ctx, true); err != nil {
+		t.Fatal(err)
+	}
+
+	logDone("build - add/copy environment replacement")
+}
+
+func TestBuildEnvironmentReplacementEnv(t *testing.T) {
+	name := "testbuildenvironmentreplacement"
+
+	defer deleteImages(name)
+
+	_, err := buildImage(name,
+		`
+  FROM scratch
+  ENV foo foo
+  ENV bar ${foo}
+  `, true)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := inspectFieldJSON(name, "Config.Env")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envResult := []string{}
+
+	if err = unmarshalJSON([]byte(res), &envResult); err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+
+	for _, env := range envResult {
+		parts := strings.SplitN(env, "=", 2)
+		if parts[0] == "bar" {
+			found = true
+			if parts[1] != "foo" {
+				t.Fatalf("Could not find replaced var for env `bar`: got %q instead of `foo`", parts[1])
+			}
+		}
+	}
+
+	if !found {
+		t.Fatal("Never found the `bar` env variable")
+	}
+
+	logDone("build - env environment replacement")
+}
+
+func TestBuildHandleEscapes(t *testing.T) {
+	name := "testbuildhandleescapes"
+
+	defer deleteImages(name)
+
+	_, err := buildImage(name,
+		`
+  FROM scratch
+  ENV FOO bar
+  VOLUME ${FOO}
+  `, true)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result map[string]map[string]struct{}
+
+	res, err := inspectFieldJSON(name, "Config.Volumes")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = unmarshalJSON([]byte(res), &result); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := result["bar"]; !ok {
+		t.Fatal("Could not find volume bar set from env foo in volumes table")
+	}
+
+	deleteImages(name)
+
+	_, err = buildImage(name,
+		`
+  FROM scratch
+  ENV FOO bar
+  VOLUME \${FOO}
+  `, true)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err = inspectFieldJSON(name, "Config.Volumes")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = unmarshalJSON([]byte(res), &result); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := result["${FOO}"]; !ok {
+		t.Fatal("Could not find volume ${FOO} set from env foo in volumes table")
+	}
+
+	deleteImages(name)
+
+	// this test in particular provides *7* backslashes and expects 6 to come back.
+	// Like above, the first escape is swallowed and the rest are treated as
+	// literals, this one is just less obvious because of all the character noise.
+
+	_, err = buildImage(name,
+		`
+  FROM scratch
+  ENV FOO bar
+  VOLUME \\\\\\\${FOO}
+  `, true)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err = inspectFieldJSON(name, "Config.Volumes")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = unmarshalJSON([]byte(res), &result); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := result[`\\\\\\${FOO}`]; !ok {
+		t.Fatal(`Could not find volume \\\\\\${FOO} set from env foo in volumes table`)
+	}
+
+	logDone("build - handle escapes")
+}
 
 func TestBuildOnBuildLowercase(t *testing.T) {
 	name := "testbuildonbuildlowercase"
@@ -52,8 +361,8 @@ func TestBuildOnBuildLowercase(t *testing.T) {
 
 func TestBuildEnvEscapes(t *testing.T) {
 	name := "testbuildenvescapes"
-	defer deleteAllContainers()
 	defer deleteImages(name)
+	defer deleteAllContainers()
 	_, err := buildImage(name,
 		`
     FROM busybox
@@ -77,14 +386,14 @@ func TestBuildEnvEscapes(t *testing.T) {
 
 func TestBuildEnvOverwrite(t *testing.T) {
 	name := "testbuildenvoverwrite"
-	defer deleteAllContainers()
 	defer deleteImages(name)
+	defer deleteAllContainers()
 
 	_, err := buildImage(name,
 		`
     FROM busybox
     ENV TEST foo
-    CMD echo \${TEST}
+    CMD echo ${TEST}
     `,
 		true)
 
@@ -107,7 +416,10 @@ func TestBuildEnvOverwrite(t *testing.T) {
 
 func TestBuildOnBuildForbiddenMaintainerInSourceImage(t *testing.T) {
 	name := "testbuildonbuildforbiddenmaintainerinsourceimage"
+	defer deleteImages("onbuild")
 	defer deleteImages(name)
+	defer deleteAllContainers()
+
 	createCmd := exec.Command(dockerBinary, "create", "busybox", "true")
 	out, _, _, err := runCommandWithStdoutStderr(createCmd)
 	if err != nil {
@@ -138,7 +450,10 @@ func TestBuildOnBuildForbiddenMaintainerInSourceImage(t *testing.T) {
 
 func TestBuildOnBuildForbiddenFromInSourceImage(t *testing.T) {
 	name := "testbuildonbuildforbiddenfrominsourceimage"
+	defer deleteImages("onbuild")
 	defer deleteImages(name)
+	defer deleteAllContainers()
+
 	createCmd := exec.Command(dockerBinary, "create", "busybox", "true")
 	out, _, _, err := runCommandWithStdoutStderr(createCmd)
 	if err != nil {
@@ -169,7 +484,10 @@ func TestBuildOnBuildForbiddenFromInSourceImage(t *testing.T) {
 
 func TestBuildOnBuildForbiddenChainedInSourceImage(t *testing.T) {
 	name := "testbuildonbuildforbiddenchainedinsourceimage"
+	defer deleteImages("onbuild")
 	defer deleteImages(name)
+	defer deleteAllContainers()
+
 	createCmd := exec.Command(dockerBinary, "create", "busybox", "true")
 	out, _, _, err := runCommandWithStdoutStderr(createCmd)
 	if err != nil {
@@ -202,9 +520,9 @@ func TestBuildOnBuildCmdEntrypointJSON(t *testing.T) {
 	name1 := "onbuildcmd"
 	name2 := "onbuildgenerated"
 
-	defer deleteAllContainers()
 	defer deleteImages(name2)
 	defer deleteImages(name1)
+	defer deleteAllContainers()
 
 	_, err := buildImage(name1, `
 FROM busybox
@@ -239,9 +557,9 @@ func TestBuildOnBuildEntrypointJSON(t *testing.T) {
 	name1 := "onbuildcmd"
 	name2 := "onbuildgenerated"
 
-	defer deleteAllContainers()
 	defer deleteImages(name2)
 	defer deleteImages(name1)
+	defer deleteAllContainers()
 
 	_, err := buildImage(name1, `
 FROM busybox
@@ -287,6 +605,10 @@ func TestBuildCacheADD(t *testing.T) {
 		true); err != nil {
 		t.Fatal(err)
 	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteImages(name)
 	_, out, err := buildImageWithOut(name,
 		fmt.Sprintf(`FROM scratch
 		ADD %s/index.html /`, server.URL),
@@ -311,6 +633,8 @@ func TestBuildSixtySteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -335,6 +659,8 @@ RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -353,6 +679,8 @@ ADD test_file .`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	done := make(chan struct{})
 	go func() {
 		if _, err := buildImageFromContext(name, ctx, true); err != nil {
@@ -387,6 +715,8 @@ RUN [ $(ls -l /exists/exists_file | awk '{print $3":"$4}') = 'dockerio:dockerio'
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -626,6 +956,8 @@ RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -650,6 +982,8 @@ RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -675,6 +1009,8 @@ RUN [ $(ls -l /exists/test_file | awk '{print $3":"$4}') = 'root:root' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -701,6 +1037,8 @@ RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -719,6 +1057,8 @@ ADD . /`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -743,6 +1083,8 @@ RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -761,6 +1103,8 @@ COPY test_file .`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	done := make(chan struct{})
 	go func() {
 		if _, err := buildImageFromContext(name, ctx, true); err != nil {
@@ -795,6 +1139,8 @@ RUN [ $(ls -l /exists/exists_file | awk '{print $3":"$4}') = 'dockerio:dockerio'
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -819,6 +1165,8 @@ RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -842,6 +1190,8 @@ RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -867,6 +1217,8 @@ RUN [ $(ls -l /exists/test_file | awk '{print $3":"$4}') = 'root:root' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -893,6 +1245,8 @@ RUN [ $(ls -l /exists | awk '{print $3":"$4}') = 'dockerio:dockerio' ]`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -910,6 +1264,8 @@ COPY . /`,
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -923,7 +1279,7 @@ func TestBuildCopyDisallowRemote(t *testing.T) {
 COPY https://index.docker.io/robots.txt /`,
 		true)
 	if err == nil || !strings.Contains(out, "Source can't be a URL for COPY") {
-		t.Fatal("Error should be about disallowed remote source, got err: %s, out: %q", err, out)
+		t.Fatalf("Error should be about disallowed remote source, got err: %s, out: %q", err, out)
 	}
 	logDone("build - copy - disallow copy from remote")
 }
@@ -1011,9 +1367,12 @@ func TestBuildWithInaccessibleFilesInContext(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer ctx.Close()
-		if err := os.Symlink(filepath.Join(ctx.Dir, "g"), "../../../../../../../../../../../../../../../../../../../azA"); err != nil {
+
+		target := "../../../../../../../../../../../../../../../../../../../azA"
+		if err := os.Symlink(filepath.Join(ctx.Dir, "g"), target); err != nil {
 			t.Fatal(err)
 		}
+		defer os.Remove(target)
 		// This is used to ensure we don't follow links when checking if everything in the context is accessible
 		// This test doesn't require that we run commands as an unprivileged user
 		if _, err := buildImageFromContext(name, ctx, true); err != nil {
@@ -1073,7 +1432,7 @@ func TestBuildForceRm(t *testing.T) {
 	buildCmd := exec.Command(dockerBinary, "build", "-t", name, "--force-rm", ".")
 	buildCmd.Dir = ctx.Dir
 	if out, _, err := runCommandWithOutput(buildCmd); err == nil {
-		t.Fatal("failed to build the image: %s, %v", out, err)
+		t.Fatalf("failed to build the image: %s, %v", out, err)
 	}
 
 	containerCountAfter, err := getContainerCount()
@@ -1365,6 +1724,7 @@ func TestBuildContextCleanup(t *testing.T) {
 func TestBuildContextCleanupFailedBuild(t *testing.T) {
 	name := "testbuildcontextcleanup"
 	defer deleteImages(name)
+	defer deleteAllContainers()
 	entries, err := ioutil.ReadDir("/var/lib/docker/tmp")
 	if err != nil {
 		t.Fatalf("failed to list contents of tmp dir: %s", err)
@@ -1429,6 +1789,49 @@ func TestBuildExpose(t *testing.T) {
 	logDone("build - expose")
 }
 
+func TestBuildEmptyEntrypointInheritance(t *testing.T) {
+	name := "testbuildentrypointinheritance"
+	name2 := "testbuildentrypointinheritance2"
+	defer deleteImages(name, name2)
+
+	_, err := buildImage(name,
+		`FROM busybox
+        ENTRYPOINT ["/bin/echo"]`,
+		true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := inspectField(name, "Config.Entrypoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := "[/bin/echo]"
+	if res != expected {
+		t.Fatalf("Entrypoint %s, expected %s", res, expected)
+	}
+
+	_, err = buildImage(name2,
+		fmt.Sprintf(`FROM %s
+        ENTRYPOINT []`, name),
+		true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = inspectField(name2, "Config.Entrypoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected = "[]"
+
+	if res != expected {
+		t.Fatalf("Entrypoint %s, expected %s", res, expected)
+	}
+
+	logDone("build - empty entrypoint inheritance")
+}
+
 func TestBuildEmptyEntrypoint(t *testing.T) {
 	name := "testbuildentrypoint"
 	defer deleteImages(name)
@@ -1490,6 +1893,7 @@ func TestBuildOnBuildLimitedInheritence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer ctx.Close()
 
 		out1, _, err := dockerCmdInDir(t, ctx.Dir, "build", "-t", name1, ".")
 		if err != nil {
@@ -1506,6 +1910,7 @@ func TestBuildOnBuildLimitedInheritence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer ctx.Close()
 
 		out2, _, err = dockerCmdInDir(t, ctx.Dir, "build", "-t", name2, ".")
 		if err != nil {
@@ -1522,6 +1927,7 @@ func TestBuildOnBuildLimitedInheritence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer ctx.Close()
 
 		out3, _, err = dockerCmdInDir(t, ctx.Dir, "build", "-t", name3, ".")
 		if err != nil {
@@ -1573,7 +1979,8 @@ func TestBuildWithCache(t *testing.T) {
 
 func TestBuildWithoutCache(t *testing.T) {
 	name := "testbuildwithoutcache"
-	defer deleteImages(name)
+	name2 := "testbuildwithoutcache2"
+	defer deleteImages(name, name2)
 	id1, err := buildImage(name,
 		`FROM scratch
 		MAINTAINER dockerio
@@ -1583,7 +1990,8 @@ func TestBuildWithoutCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := buildImage(name,
+
+	id2, err := buildImage(name2,
 		`FROM scratch
 		MAINTAINER dockerio
 		EXPOSE 5432
@@ -1600,7 +2008,8 @@ func TestBuildWithoutCache(t *testing.T) {
 
 func TestBuildADDLocalFileWithCache(t *testing.T) {
 	name := "testbuildaddlocalfilewithcache"
-	defer deleteImages(name)
+	name2 := "testbuildaddlocalfilewithcache2"
+	defer deleteImages(name, name2)
 	dockerfile := `
 		FROM busybox
         MAINTAINER dockerio
@@ -1617,7 +2026,7 @@ func TestBuildADDLocalFileWithCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := buildImageFromContext(name, ctx, true)
+	id2, err := buildImageFromContext(name2, ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1629,7 +2038,8 @@ func TestBuildADDLocalFileWithCache(t *testing.T) {
 
 func TestBuildADDMultipleLocalFileWithCache(t *testing.T) {
 	name := "testbuildaddmultiplelocalfilewithcache"
-	defer deleteImages(name)
+	name2 := "testbuildaddmultiplelocalfilewithcache2"
+	defer deleteImages(name, name2)
 	dockerfile := `
 		FROM busybox
         MAINTAINER dockerio
@@ -1646,7 +2056,7 @@ func TestBuildADDMultipleLocalFileWithCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := buildImageFromContext(name, ctx, true)
+	id2, err := buildImageFromContext(name2, ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1658,7 +2068,8 @@ func TestBuildADDMultipleLocalFileWithCache(t *testing.T) {
 
 func TestBuildADDLocalFileWithoutCache(t *testing.T) {
 	name := "testbuildaddlocalfilewithoutcache"
-	defer deleteImages(name)
+	name2 := "testbuildaddlocalfilewithoutcache2"
+	defer deleteImages(name, name2)
 	dockerfile := `
 		FROM busybox
         MAINTAINER dockerio
@@ -1675,7 +2086,7 @@ func TestBuildADDLocalFileWithoutCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := buildImageFromContext(name, ctx, false)
+	id2, err := buildImageFromContext(name2, ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1687,7 +2098,8 @@ func TestBuildADDLocalFileWithoutCache(t *testing.T) {
 
 func TestBuildCopyDirButNotFile(t *testing.T) {
 	name := "testbuildcopydirbutnotfile"
-	defer deleteImages(name)
+	name2 := "testbuildcopydirbutnotfile2"
+	defer deleteImages(name, name2)
 	dockerfile := `
         FROM scratch
         COPY dir /tmp/`
@@ -1706,7 +2118,7 @@ func TestBuildCopyDirButNotFile(t *testing.T) {
 	if err := ctx.Add("dir_file", "hello2"); err != nil {
 		t.Fatal(err)
 	}
-	id2, err := buildImageFromContext(name, ctx, true)
+	id2, err := buildImageFromContext(name2, ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1718,7 +2130,11 @@ func TestBuildCopyDirButNotFile(t *testing.T) {
 
 func TestBuildADDCurrentDirWithCache(t *testing.T) {
 	name := "testbuildaddcurrentdirwithcache"
-	defer deleteImages(name)
+	name2 := name + "2"
+	name3 := name + "3"
+	name4 := name + "4"
+	name5 := name + "5"
+	defer deleteImages(name, name2, name3, name4, name5)
 	dockerfile := `
         FROM scratch
         MAINTAINER dockerio
@@ -1738,7 +2154,7 @@ func TestBuildADDCurrentDirWithCache(t *testing.T) {
 	if err := ctx.Add("bar", "hello2"); err != nil {
 		t.Fatal(err)
 	}
-	id2, err := buildImageFromContext(name, ctx, true)
+	id2, err := buildImageFromContext(name2, ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1749,7 +2165,7 @@ func TestBuildADDCurrentDirWithCache(t *testing.T) {
 	if err := ctx.Add("foo", "hello1"); err != nil {
 		t.Fatal(err)
 	}
-	id3, err := buildImageFromContext(name, ctx, true)
+	id3, err := buildImageFromContext(name3, ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1761,14 +2177,14 @@ func TestBuildADDCurrentDirWithCache(t *testing.T) {
 	if err := ctx.Add("foo", "hello1"); err != nil {
 		t.Fatal(err)
 	}
-	id4, err := buildImageFromContext(name, ctx, true)
+	id4, err := buildImageFromContext(name4, ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id3 == id4 {
 		t.Fatal("The cache should have been invalided but hasn't.")
 	}
-	id5, err := buildImageFromContext(name, ctx, true)
+	id5, err := buildImageFromContext(name5, ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1780,7 +2196,8 @@ func TestBuildADDCurrentDirWithCache(t *testing.T) {
 
 func TestBuildADDCurrentDirWithoutCache(t *testing.T) {
 	name := "testbuildaddcurrentdirwithoutcache"
-	defer deleteImages(name)
+	name2 := "testbuildaddcurrentdirwithoutcache2"
+	defer deleteImages(name, name2)
 	dockerfile := `
         FROM scratch
         MAINTAINER dockerio
@@ -1796,7 +2213,7 @@ func TestBuildADDCurrentDirWithoutCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := buildImageFromContext(name, ctx, false)
+	id2, err := buildImageFromContext(name2, ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1840,7 +2257,8 @@ func TestBuildADDRemoteFileWithCache(t *testing.T) {
 
 func TestBuildADDRemoteFileWithoutCache(t *testing.T) {
 	name := "testbuildaddremotefilewithoutcache"
-	defer deleteImages(name)
+	name2 := "testbuildaddremotefilewithoutcache2"
+	defer deleteImages(name, name2)
 	server, err := fakeStorage(map[string]string{
 		"baz": "hello",
 	})
@@ -1856,7 +2274,7 @@ func TestBuildADDRemoteFileWithoutCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := buildImage(name,
+	id2, err := buildImage(name2,
 		fmt.Sprintf(`FROM scratch
         MAINTAINER dockerio
         ADD %s/baz /usr/lib/baz/quux`, server.URL),
@@ -1868,6 +2286,68 @@ func TestBuildADDRemoteFileWithoutCache(t *testing.T) {
 		t.Fatal("The cache should have been invalided but hasn't.")
 	}
 	logDone("build - add remote file without cache")
+}
+
+func TestBuildADDRemoteFileMTime(t *testing.T) {
+	name := "testbuildaddremotefilemtime"
+	name2 := name + "2"
+	name3 := name + "3"
+	name4 := name + "4"
+
+	defer deleteImages(name, name2, name3, name4)
+
+	server, err := fakeStorage(map[string]string{"baz": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	ctx, err := fakeContext(fmt.Sprintf(`FROM scratch
+        MAINTAINER dockerio
+        ADD %s/baz /usr/lib/baz/quux`, server.URL), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx.Close()
+
+	id1, err := buildImageFromContext(name, ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id2, err := buildImageFromContext(name2, ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id1 != id2 {
+		t.Fatal("The cache should have been used but wasn't - #1")
+	}
+
+	// Now set baz's times to anything else and redo the build
+	// This time the cache should not be used
+	bazPath := path.Join(server.FakeContext.Dir, "baz")
+	err = syscall.UtimesNano(bazPath, make([]syscall.Timespec, 2))
+	if err != nil {
+		t.Fatalf("Error setting mtime on %q: %v", bazPath, err)
+	}
+
+	id3, err := buildImageFromContext(name3, ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id1 == id3 {
+		t.Fatal("The cache should not have been used but was")
+	}
+
+	// And for good measure do it again and make sure cache is used this time
+	id4, err := buildImageFromContext(name4, ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id3 != id4 {
+		t.Fatal("The cache should have been used but wasn't - #2")
+	}
+	logDone("build - add remote file testing mtime")
 }
 
 func TestBuildADDLocalAndRemoteFilesWithCache(t *testing.T) {
@@ -1949,7 +2429,7 @@ func TestBuildNoContext(t *testing.T) {
 		t.Fatalf("build failed to complete: %v %v", out, err)
 	}
 
-	if out, _, err := cmd(t, "run", "nocontext"); out != "ok\n" || err != nil {
+	if out, _, err := dockerCmd(t, "run", "--rm", "nocontext"); out != "ok\n" || err != nil {
 		t.Fatalf("run produced invalid output: %q, expected %q", out, "ok")
 	}
 
@@ -1960,7 +2440,8 @@ func TestBuildNoContext(t *testing.T) {
 // TODO: TestCaching
 func TestBuildADDLocalAndRemoteFilesWithoutCache(t *testing.T) {
 	name := "testbuildaddlocalandremotefilewithoutcache"
-	defer deleteImages(name)
+	name2 := "testbuildaddlocalandremotefilewithoutcache2"
+	defer deleteImages(name, name2)
 	server, err := fakeStorage(map[string]string{
 		"baz": "hello",
 	})
@@ -1983,7 +2464,7 @@ func TestBuildADDLocalAndRemoteFilesWithoutCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := buildImageFromContext(name, ctx, false)
+	id2, err := buildImageFromContext(name2, ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2148,6 +2629,7 @@ func TestBuildInheritance(t *testing.T) {
 func TestBuildFails(t *testing.T) {
 	name := "testbuildfails"
 	defer deleteImages(name)
+	defer deleteAllContainers()
 	_, err := buildImage(name,
 		`FROM busybox
 		RUN sh -c "exit 23"`,
@@ -2325,6 +2807,29 @@ func TestBuildDockerignore(t *testing.T) {
 	logDone("build - test .dockerignore")
 }
 
+func TestBuildDockerignoreCleanPaths(t *testing.T) {
+	name := "testbuilddockerignorecleanpaths"
+	defer deleteImages(name)
+	dockerfile := `
+        FROM busybox
+        ADD . /tmp/
+        RUN (! ls /tmp/foo) && (! ls /tmp/foo2) && (! ls /tmp/dir1/foo)`
+	ctx, err := fakeContext(dockerfile, map[string]string{
+		"foo":           "foo",
+		"foo2":          "foo2",
+		"dir1/foo":      "foo in dir1",
+		".dockerignore": "./foo\ndir1//foo\n./dir1/../foo2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx.Close()
+	if _, err := buildImageFromContext(name, ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	logDone("build - test .dockerignore with clean paths")
+}
+
 func TestBuildDockerignoringDockerfile(t *testing.T) {
 	name := "testbuilddockerignoredockerfile"
 	defer deleteImages(name)
@@ -2334,13 +2839,20 @@ func TestBuildDockerignoringDockerfile(t *testing.T) {
 		"Dockerfile":    "FROM scratch",
 		".dockerignore": "Dockerfile\n",
 	})
-	defer ctx.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
 	if _, err = buildImageFromContext(name, ctx, true); err == nil {
 		t.Fatalf("Didn't get expected error from ignoring Dockerfile")
 	}
+
+	// now try it with ./Dockerfile
+	ctx.Add(".dockerignore", "./Dockerfile\n")
+	if _, err = buildImageFromContext(name, ctx, true); err == nil {
+		t.Fatalf("Didn't get expected error from ignoring ./Dockerfile")
+	}
+
 	logDone("build - test .dockerignore of Dockerfile")
 }
 
@@ -2489,6 +3001,7 @@ func TestBuildEnvUsage(t *testing.T) {
 	name := "testbuildenvusage"
 	defer deleteImages(name)
 	dockerfile := `FROM busybox
+ENV    HOME /root
 ENV    PATH $HOME/bin:$PATH
 ENV    PATH /tmp:$PATH
 RUN    [ "$PATH" = "/tmp:$HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" ]
@@ -2509,11 +3022,53 @@ RUN    [ "$(cat $TO)" = "hello" ]
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	_, err = buildImageFromContext(name, ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	logDone("build - environment variables usage")
+}
+
+func TestBuildEnvUsage2(t *testing.T) {
+	name := "testbuildenvusage2"
+	defer deleteImages(name)
+	dockerfile := `FROM busybox
+ENV    abc=def
+RUN    [ "$abc" = "def" ]
+ENV    def="hello world"
+RUN    [ "$def" = "hello world" ]
+ENV    def=hello\ world
+RUN    [ "$def" = "hello world" ]
+ENV    v1=abc v2="hi there"
+RUN    [ "$v1" = "abc" ]
+RUN    [ "$v2" = "hi there" ]
+ENV    v3='boogie nights' v4="with'quotes too"
+RUN    [ "$v3" = "boogie nights" ]
+RUN    [ "$v4" = "with'quotes too" ]
+ENV    abc=zzz FROM=hello/docker/world
+ENV    abc=zzz TO=/docker/world/hello
+ADD    $FROM $TO
+RUN    [ "$(cat $TO)" = "hello" ]
+ENV    abc "zzz"
+RUN    [ $abc = \"zzz\" ]
+ENV    abc 'yyy'
+RUN    [ $abc = \'yyy\' ]
+ENV    abc=
+RUN    [ "$abc" = "" ]
+`
+	ctx, err := fakeContext(dockerfile, map[string]string{
+		"hello/docker/world": "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = buildImageFromContext(name, ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logDone("build - environment variables usage2")
 }
 
 func TestBuildAddScript(t *testing.T) {
@@ -2531,6 +3086,8 @@ RUN [ "$(cat /testfile)" = 'test!' ]`
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer ctx.Close()
+
 	_, err = buildImageFromContext(name, ctx, true)
 	if err != nil {
 		t.Fatal(err)
@@ -2585,6 +3142,7 @@ RUN cat /existing-directory-trailing-slash/test/foo | grep Hi`
 		}
 		return &FakeContext{Dir: tmpDir}
 	}()
+	defer ctx.Close()
 
 	if _, err := buildImageFromContext(name, ctx, true); err != nil {
 		t.Fatalf("build failed to complete for TestBuildAddTar: %v", err)
@@ -2782,6 +3340,7 @@ func TestBuildIgnoreInvalidInstruction(t *testing.T) {
 
 func TestBuildEntrypointInheritance(t *testing.T) {
 	defer deleteImages("parent", "child")
+	defer deleteAllContainers()
 
 	if _, err := buildImage("parent", `
     FROM busybox
@@ -2806,7 +3365,7 @@ func TestBuildEntrypointInheritance(t *testing.T) {
 	status, _ = runCommand(exec.Command(dockerBinary, "run", "child"))
 
 	if status != 5 {
-		t.Fatal("expected exit code 5 but received %d", status)
+		t.Fatalf("expected exit code 5 but received %d", status)
 	}
 
 	logDone("build - clear entrypoint")
@@ -2820,6 +3379,7 @@ func TestBuildEntrypointInheritanceInspect(t *testing.T) {
 	)
 
 	defer deleteImages(name, name2)
+	defer deleteAllContainers()
 
 	if _, err := buildImage(name, "FROM busybox\nENTRYPOINT /foo/bar", true); err != nil {
 		t.Fatal(err)
@@ -2863,7 +3423,7 @@ func TestBuildRunShEntrypoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "run", name))
+	out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "run", "--rm", name))
 
 	if err != nil {
 		t.Fatal(err, out)
@@ -2910,12 +3470,13 @@ func TestBuildVerifySingleQuoteFails(t *testing.T) {
 	// it should barf on it.
 	name := "testbuildsinglequotefails"
 	defer deleteImages(name)
+	defer deleteAllContainers()
 
 	_, err := buildImage(name,
 		`FROM busybox
 		CMD [ '/bin/sh', '-c', 'echo hi' ]`,
 		true)
-	_, _, err = runCommandWithOutput(exec.Command(dockerBinary, "run", name))
+	_, _, err = runCommandWithOutput(exec.Command(dockerBinary, "run", "--rm", name))
 
 	if err == nil {
 		t.Fatal("The image was not supposed to be able to run")

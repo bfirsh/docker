@@ -14,8 +14,8 @@ import (
 	"regexp"
 	"strings"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/nat"
-	"github.com/docker/docker/pkg/log"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/runconfig"
 )
@@ -31,21 +31,39 @@ func nullDispatch(b *Builder, args []string, attributes map[string]bool, origina
 // in the dockerfile available from the next statement on via ${foo}.
 //
 func env(b *Builder, args []string, attributes map[string]bool, original string) error {
-	if len(args) != 2 {
-		return fmt.Errorf("ENV accepts two arguments")
+	if len(args) == 0 {
+		return fmt.Errorf("ENV is missing arguments")
 	}
 
-	fullEnv := fmt.Sprintf("%s=%s", args[0], args[1])
+	if len(args)%2 != 0 {
+		// should never get here, but just in case
+		return fmt.Errorf("Bad input to ENV, too many args")
+	}
 
-	for i, envVar := range b.Config.Env {
-		envParts := strings.SplitN(envVar, "=", 2)
-		if args[0] == envParts[0] {
-			b.Config.Env[i] = fullEnv
-			return b.commit("", b.Config.Cmd, fmt.Sprintf("ENV %s", fullEnv))
+	commitStr := "ENV"
+
+	for j := 0; j < len(args); j++ {
+		// name  ==> args[j]
+		// value ==> args[j+1]
+		newVar := args[j] + "=" + args[j+1] + ""
+		commitStr += " " + newVar
+
+		gotOne := false
+		for i, envVar := range b.Config.Env {
+			envParts := strings.SplitN(envVar, "=", 2)
+			if envParts[0] == args[j] {
+				b.Config.Env[i] = newVar
+				gotOne = true
+				break
+			}
 		}
+		if !gotOne {
+			b.Config.Env = append(b.Config.Env, newVar)
+		}
+		j++
 	}
-	b.Config.Env = append(b.Config.Env, fullEnv)
-	return b.commit("", b.Config.Cmd, fmt.Sprintf("ENV %s", fullEnv))
+
+	return b.commit("", b.Config.Cmd, commitStr)
 }
 
 // MAINTAINER some text <maybe@an.email.address>
@@ -97,6 +115,12 @@ func from(b *Builder, args []string, attributes map[string]bool, original string
 	name := args[0]
 
 	image, err := b.Daemon.Repositories().LookupImage(name)
+	if b.Pull {
+		image, err = b.pullImage(name)
+		if err != nil {
+			return err
+		}
+	}
 	if err != nil {
 		if b.Daemon.Graph().IsNotExist(err) {
 			image, err = b.pullImage(name)
@@ -183,7 +207,7 @@ func run(b *Builder, args []string, attributes map[string]bool, original string)
 	runCmd.SetOutput(ioutil.Discard)
 	runCmd.Usage = nil
 
-	config, _, _, err := runconfig.Parse(runCmd, append([]string{b.image}, args...), nil)
+	config, _, _, err := runconfig.Parse(runCmd, append([]string{b.image}, args...))
 	if err != nil {
 		return err
 	}
@@ -195,7 +219,7 @@ func run(b *Builder, args []string, attributes map[string]bool, original string)
 
 	defer func(cmd []string) { b.Config.Cmd = cmd }(cmd)
 
-	log.Debugf("Command to be executed: %v", b.Config.Cmd)
+	log.Debugf("[BUILDER] Command to be executed: %v", b.Config.Cmd)
 
 	hit, err := b.probeCache()
 	if err != nil {
@@ -234,7 +258,7 @@ func run(b *Builder, args []string, attributes map[string]bool, original string)
 func cmd(b *Builder, args []string, attributes map[string]bool, original string) error {
 	b.Config.Cmd = handleJsonArgs(args, attributes)
 
-	if !attributes["json"] && len(b.Config.Entrypoint) == 0 {
+	if !attributes["json"] {
 		b.Config.Cmd = append([]string{"/bin/sh", "-c"}, b.Config.Cmd...)
 	}
 
@@ -261,14 +285,14 @@ func entrypoint(b *Builder, args []string, attributes map[string]bool, original 
 	parsed := handleJsonArgs(args, attributes)
 
 	switch {
-	case len(parsed) == 0:
-		// ENTYRPOINT []
-		b.Config.Entrypoint = nil
 	case attributes["json"]:
 		// ENTRYPOINT ["echo", "hi"]
 		b.Config.Entrypoint = parsed
+	case len(parsed) == 0:
+		// ENTRYPOINT []
+		b.Config.Entrypoint = nil
 	default:
-		// ENTYRPOINT echo hi
+		// ENTRYPOINT echo hi
 		b.Config.Entrypoint = []string{"/bin/sh", "-c", parsed[0]}
 	}
 

@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
+
+	"github.com/docker/docker/vendor/src/github.com/kr/pty"
 )
 
 // save a repo and try to load it using stdout
@@ -68,8 +73,35 @@ func TestSaveAndLoadRepoStdout(t *testing.T) {
 
 	os.Remove("/tmp/foobar-save-load-test.tar")
 
-	logDone("save - save a repo using stdout")
-	logDone("load - load a repo using stdout")
+	logDone("save - save/load a repo using stdout")
+
+	pty, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("Could not open pty: %v", err)
+	}
+	cmd := exec.Command(dockerBinary, "save", repoName)
+	cmd.Stdin = tty
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start err: %v", err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("did not break writing to a TTY")
+	}
+
+	buf := make([]byte, 1024)
+
+	n, err := pty.Read(buf)
+	if err != nil {
+		t.Fatal("could not read tty output")
+	}
+
+	if !bytes.Contains(buf[:n], []byte("Cowardly refusing")) {
+		t.Fatal("help output is not being yielded", out)
+	}
+
+	logDone("save - do not save to a tty")
 }
 
 func TestSaveSingleTag(t *testing.T) {
@@ -197,8 +229,7 @@ func TestSaveAndLoadRepoFlags(t *testing.T) {
 
 	os.Remove("/tmp/foobar-save-load-test.tar")
 
-	logDone("save - save a repo using -o")
-	logDone("load - load a repo using -i")
+	logDone("save - save a repo using -o && load a repo using -i")
 }
 
 func TestSaveMultipleNames(t *testing.T) {
@@ -210,12 +241,15 @@ func TestSaveMultipleNames(t *testing.T) {
 	if out, _, err := runCommandWithOutput(tagCmd); err != nil {
 		t.Fatalf("failed to tag repo: %s, %v", out, err)
 	}
+	defer deleteImages(repoName + "-one")
+
 	// Make two images
 	tagCmdFinal = fmt.Sprintf("%v tag scratch:latest %v-two:latest", dockerBinary, repoName)
 	tagCmd = exec.Command("bash", "-c", tagCmdFinal)
 	if out, _, err := runCommandWithOutput(tagCmd); err != nil {
 		t.Fatalf("failed to tag repo: %s, %v", out, err)
 	}
+	defer deleteImages(repoName + "-two")
 
 	saveCmdFinal := fmt.Sprintf("%v save %v-one %v-two:latest | tar xO repositories | grep -q -E '(-one|-two)'", dockerBinary, repoName, repoName)
 	saveCmd := exec.Command("bash", "-c", saveCmdFinal)
@@ -226,6 +260,66 @@ func TestSaveMultipleNames(t *testing.T) {
 	deleteImages(repoName)
 
 	logDone("save - save by multiple names")
+}
+
+func TestSaveRepoWithMultipleImages(t *testing.T) {
+
+	makeImage := func(from string, tag string) string {
+		runCmd := exec.Command(dockerBinary, "run", "-d", from, "true")
+		var (
+			out string
+			err error
+		)
+		if out, _, err = runCommandWithOutput(runCmd); err != nil {
+			t.Fatalf("failed to create a container: %v %v", out, err)
+		}
+		cleanedContainerID := stripTrailingCharacters(out)
+
+		commitCmd := exec.Command(dockerBinary, "commit", cleanedContainerID, tag)
+		if out, _, err = runCommandWithOutput(commitCmd); err != nil {
+			t.Fatalf("failed to commit container: %v %v", out, err)
+		}
+		imageID := stripTrailingCharacters(out)
+
+		deleteContainer(cleanedContainerID)
+		return imageID
+	}
+
+	repoName := "foobar-save-multi-images-test"
+	tagFoo := repoName + ":foo"
+	tagBar := repoName + ":bar"
+
+	idFoo := makeImage("busybox:latest", tagFoo)
+	idBar := makeImage("busybox:latest", tagBar)
+
+	deleteImages(repoName)
+
+	// create the archive
+	saveCmdFinal := fmt.Sprintf("%v save %v | tar t | grep 'VERSION' |cut -d / -f1", dockerBinary, repoName)
+	saveCmd := exec.Command("bash", "-c", saveCmdFinal)
+	out, _, err := runCommandWithOutput(saveCmd)
+	if err != nil {
+		t.Fatalf("failed to save multiple images: %s, %v", out, err)
+	}
+	actual := strings.Split(stripTrailingCharacters(out), "\n")
+
+	// make the list of expected layers
+	historyCmdFinal := fmt.Sprintf("%v history -q --no-trunc %v", dockerBinary, "busybox:latest")
+	historyCmd := exec.Command("bash", "-c", historyCmdFinal)
+	out, _, err = runCommandWithOutput(historyCmd)
+	if err != nil {
+		t.Fatalf("failed to get history: %s, %v", out, err)
+	}
+
+	expected := append(strings.Split(stripTrailingCharacters(out), "\n"), idFoo, idBar)
+
+	sort.Strings(actual)
+	sort.Strings(expected)
+	if !reflect.DeepEqual(expected, actual) {
+		t.Fatalf("achive does not contains the right layers: got %v, expected %v", actual, expected)
+	}
+
+	logDone("save - save repository with multiple images")
 }
 
 // Issue #6722 #5892 ensure directories are included in changes

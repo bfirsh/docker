@@ -58,7 +58,7 @@ var (
 	// Mary Leakey - British paleoanthropologist who discovered the first fossilized Proconsul skull - http://en.wikipedia.org/wiki/Mary_Leakey
 	// Muhammad ibn Jābir al-Ḥarrānī al-Battānī was a founding father of astronomy. http://en.wikipedia.org/wiki/Mu%E1%B8%A5ammad_ibn_J%C4%81bir_al-%E1%B8%A4arr%C4%81n%C4%AB_al-Batt%C4%81n%C4%AB
 	// Niels Bohr is the father of quantum theory. http://en.wikipedia.org/wiki/Niels_Bohr.
-	// Nikola Tesla invented the AC electric system and every gaget ever used by a James Bond villain. http://en.wikipedia.org/wiki/Nikola_Tesla
+	// Nikola Tesla invented the AC electric system and every gadget ever used by a James Bond villain. http://en.wikipedia.org/wiki/Nikola_Tesla
 	// Pierre de Fermat pioneered several aspects of modern mathematics. http://en.wikipedia.org/wiki/Pierre_de_Fermat
 	// Rachel Carson - American marine biologist and conservationist, her book Silent Spring and other writings are credited with advancing the global environmental movement. http://en.wikipedia.org/wiki/Rachel_Carson
 	// Radia Perlman is a software designer and network engineer and most famous for her invention of the spanning-tree protocol (STP). http://en.wikipedia.org/wiki/Radia_Perlman
@@ -76,7 +76,8 @@ var (
 	//	http://en.wikipedia.org/wiki/John_Bardeen
 	//	http://en.wikipedia.org/wiki/Walter_Houser_Brattain
 	//	http://en.wikipedia.org/wiki/William_Shockley
-	right = [...]string{"albattani", "almeida", "archimedes", "ardinghelli", "babbage", "bardeen", "bartik", "bell", "blackwell", "bohr", "brattain", "brown", "carson", "colden", "cori", "curie", "darwin", "davinci", "einstein", "elion", "engelbart", "euclid", "fermat", "fermi", "feynman", "franklin", "galileo", "goldstine", "goodall", "hawking", "heisenberg", "hodgkin", "hoover", "hopper", "hypatia", "jones", "kirch", "kowalevski", "lalande", "leakey", "lovelace", "lumiere", "mayer", "mccarthy", "mcclintock", "mclean", "meitner", "mestorf", "morse", "newton", "nobel", "pare", "pasteur", "perlman", "pike", "poincare", "ptolemy", "ritchie", "rosalind", "sammet", "shockley", "sinoussi", "stallman", "tesla", "thompson", "torvalds", "turing", "wilson", "wozniak", "wright", "yalow", "yonath"}
+	// Yeong-Sil Jang was a Korean scientist and astronomer during the Joseon Dynasty; he invented the first metal printing press and water gauge. http://en.wikipedia.org/wiki/Jang_Yeong-sil
+	right = [...]string{"albattani", "almeida", "archimedes", "ardinghelli", "babbage", "bardeen", "bartik", "bell", "blackwell", "bohr", "brattain", "brown", "carson", "colden", "cori", "curie", "darwin", "davinci", "einstein", "elion", "engelbart", "euclid", "fermat", "fermi", "feynman", "franklin", "galileo", "goldstine", "goodall", "hawking", "heisenberg", "hodgkin", "hoover", "hopper", "hypatia", "jang", "jones", "kirch", "kowalevski", "lalande", "leakey", "lovelace", "lumiere", "mayer", "mccarthy", "mcclintock", "mclean", "meitner", "mestorf", "morse", "newton", "nobel", "pare", "pasteur", "perlman", "pike", "poincare", "ptolemy", "ritchie", "rosalind", "sammet", "shockley", "sinoussi", "stallman", "tesla", "thompson", "torvalds", "turing", "wilson", "wozniak", "wright", "yalow", "yonath"}
 )
 
 func GetRandomName(retry int) string {

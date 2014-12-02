@@ -41,7 +41,7 @@ func NewDaemon(t *testing.T) *Daemon {
 		t.Fatal("Please set the DEST environment variable")
 	}
 
-	dir := filepath.Join(dest, fmt.Sprintf("daemon%d", time.Now().Unix()))
+	dir := filepath.Join(dest, fmt.Sprintf("daemon%d", time.Now().UnixNano()%100000000))
 	daemonFolder, err := filepath.Abs(dir)
 	if err != nil {
 		t.Fatalf("Could not make %q an absolute path: %v", dir, err)
@@ -69,10 +69,23 @@ func (d *Daemon) Start(arg ...string) error {
 
 	args := []string{
 		"--host", d.sock(),
-		"--daemon", "--debug",
+		"--daemon",
 		"--graph", fmt.Sprintf("%s/graph", d.folder),
 		"--pidfile", fmt.Sprintf("%s/docker.pid", d.folder),
 	}
+
+	// If we don't explicitly set the log-level or debug flag(-D) then
+	// turn on debug mode
+	foundIt := false
+	for _, a := range arg {
+		if strings.Contains(a, "--log-level") || strings.Contains(a, "-D") {
+			foundIt = true
+		}
+	}
+	if !foundIt {
+		args = append(args, "--debug")
+	}
+
 	if d.storageDriver != "" {
 		args = append(args, "--storage-driver", d.storageDriver)
 	}
@@ -83,7 +96,7 @@ func (d *Daemon) Start(arg ...string) error {
 	args = append(args, arg...)
 	d.cmd = exec.Command(dockerBinary, args...)
 
-	d.logFile, err = os.OpenFile(filepath.Join(d.folder, "docker.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+	d.logFile, err = os.OpenFile(filepath.Join(d.folder, "docker.log"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		d.t.Fatalf("Could not create %s/docker.log: %v", d.folder, err)
 	}
@@ -107,8 +120,13 @@ func (d *Daemon) Start(arg ...string) error {
 
 	tick := time.Tick(500 * time.Millisecond)
 	// make sure daemon is ready to receive requests
+	startTime := time.Now().Unix()
 	for {
 		d.t.Log("waiting for daemon to start")
+		if time.Now().Unix()-startTime > 5 {
+			// After 5 seconds, give up
+			return errors.New("Daemon exited and never started")
+		}
 		select {
 		case <-time.After(2 * time.Second):
 			return errors.New("timeout: daemon does not respond")
@@ -136,6 +154,12 @@ func (d *Daemon) Start(arg ...string) error {
 
 			d.t.Log("daemon started")
 			return nil
+		case <-d.wait:
+			output, err := ioutil.ReadFile(d.logFile.Name())
+			if err != nil {
+				return fmt.Errorf("Daemon exited before it start serving requests. Error reading output from daemon: %s", err)
+			}
+			return fmt.Errorf("Daemon exited before it started serving requests. Output:\n%s", output)
 		}
 	}
 }
@@ -254,7 +278,8 @@ func sockRequest(method, endpoint string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("received status != 200 OK: %s", resp.Status)
+		body, _ := ioutil.ReadAll(resp.Body)
+		return body, fmt.Errorf("received status != 200 OK: %s", resp.Status)
 	}
 
 	return ioutil.ReadAll(resp.Body)
@@ -303,7 +328,10 @@ func deleteAllContainers() error {
 }
 
 func deleteImages(images ...string) error {
-	rmiCmd := exec.Command(dockerBinary, "rmi", strings.Join(images, " "))
+	args := make([]string, 1, 2)
+	args[0] = "rmi"
+	args = append(args, images...)
+	rmiCmd := exec.Command(dockerBinary, args...)
 	exitCode, err := runCommand(rmiCmd)
 	// set error manually if not set
 	if exitCode != 0 && err == nil {
@@ -332,11 +360,6 @@ func pullImageIfNotExist(image string) (err error) {
 		}
 	}
 	return
-}
-
-// deprecated, use dockerCmd instead
-func cmd(t *testing.T, args ...string) (string, int, error) {
-	return dockerCmd(t, args...)
 }
 
 func dockerCmd(t *testing.T, args ...string) (string, int, error) {

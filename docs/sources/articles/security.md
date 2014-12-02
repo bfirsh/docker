@@ -110,7 +110,7 @@ However, if you do that, being aware of the above mentioned security
 implication, you should ensure that it will be reachable only from a
 trusted network or VPN; or protected with e.g., `stunnel` and client SSL
 certificates. You can also secure them with [HTTPS and
-certificates](/articles/https/).
+certificates](/articles/authentication/).
 
 Recent improvements in Linux namespaces will soon allow to run
 full-featured containers without root privileges, thanks to the new user

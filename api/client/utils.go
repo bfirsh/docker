@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,13 +16,13 @@ import (
 	gosignal "os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api"
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/engine"
-	"github.com/docker/docker/pkg/log"
+	"github.com/docker/docker/pkg/signal"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/docker/pkg/term"
 	"github.com/docker/docker/registry"
@@ -34,25 +35,30 @@ var (
 
 // getTransport returns the HTTP transport for the CLI, storing it against the
 // CLI for reuse during the client session
-func (cli *DockerCli) getTransport(proto string, addr string) *http.Transport {
+func (cli *DockerCli) getTransport(proto string, addr string, tlsConfig *tls.Config) *http.Transport {
 	if cli.transport == nil {
 		cli.transport = &http.Transport{
-			TLSClientConfig: cli.tlsConfig,
-			Dial: func(dial_network, dial_addr string) (net.Conn, error) {
-				// Why 32? See issue 8035
-				return net.DialTimeout(proto, addr, 32*time.Second)
-			},
+			TLSClientConfig: tlsConfig,
 		}
+
+		// Why 32? See issue 8035
+		timeout := 32 * time.Second
 		if proto == "unix" {
 			// no need in compressing for local communications
 			cli.transport.DisableCompression = true
+			cli.transport.Dial = func(_, _ string) (net.Conn, error) {
+				return net.DialTimeout(proto, addr, timeout)
+			}
+		} else {
+			cli.transport.Dial = (&net.Dialer{Timeout: timeout}).Dial
 		}
+
 	}
 	return cli.transport
 }
 
-func (cli *DockerCli) HTTPClient(proto string, addr string) *http.Client {
-	return &http.Client{Transport: cli.getTransport(proto, addr)}
+func (cli *DockerCli) HTTPClient(proto, addr string, tlsConfig *tls.Config) *http.Client {
+	return &http.Client{Transport: cli.getTransport(proto, addr, tlsConfig)}
 }
 
 func (cli *DockerCli) encodeData(data interface{}) (*bytes.Buffer, error) {
@@ -76,7 +82,7 @@ func (cli *DockerCli) encodeData(data interface{}) (*bytes.Buffer, error) {
 }
 
 func (cli *DockerCli) call(method, path string, data interface{}, passAuthInfo bool) (io.ReadCloser, int, error) {
-	proto, addr, err := cli.host.GetProtoAddr()
+	proto, addr, tlsConfig, err := cli.host.GetConnectionDetails()
 	if err != nil {
 		return nil, -1, err
 	}
@@ -112,18 +118,28 @@ func (cli *DockerCli) call(method, path string, data interface{}, passAuthInfo b
 	req.Header.Set("User-Agent", "Docker-Client/"+dockerversion.VERSION)
 
 	req.URL.Host = addr
-	req.URL.Scheme = cli.scheme
+	if tlsConfig == nil {
+		req.URL.Scheme = "http"
+	} else {
+		req.URL.Scheme = "https"
+	}
+
 	if data != nil {
 		req.Header.Set("Content-Type", "application/json")
 	} else if method == "POST" {
 		req.Header.Set("Content-Type", "plain/text")
 	}
-	resp, err := cli.HTTPClient(proto, addr).Do(req)
+	resp, err := cli.HTTPClient(proto, addr, tlsConfig).Do(req)
 	if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			return nil, -1, ErrConnectionRefused
 		}
-		return nil, -1, err
+
+		if tlsConfig == nil {
+			return nil, -1, fmt.Errorf("%v. Are you trying to connect to a TLS-enabled daemon without TLS?", err)
+		}
+		return nil, -1, fmt.Errorf("An error occurred trying to connect: %v", err)
+
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
@@ -145,7 +161,7 @@ func (cli *DockerCli) stream(method, path string, in io.Reader, out io.Writer, h
 }
 
 func (cli *DockerCli) streamHelper(method, path string, setRawTerminal bool, in io.Reader, stdout, stderr io.Writer, headers map[string][]string) error {
-	proto, addr, err := cli.host.GetProtoAddr()
+	proto, addr, tlsConfig, err := cli.host.GetConnectionDetails()
 	if err != nil {
 		return err
 	}
@@ -160,7 +176,11 @@ func (cli *DockerCli) streamHelper(method, path string, setRawTerminal bool, in 
 	}
 	req.Header.Set("User-Agent", "Docker-Client/"+dockerversion.VERSION)
 	req.URL.Host = addr
-	req.URL.Scheme = cli.scheme
+	if tlsConfig == nil {
+		req.URL.Scheme = "http"
+	} else {
+		req.URL.Scheme = "https"
+	}
 	if method == "POST" {
 		req.Header.Set("Content-Type", "plain/text")
 	}
@@ -170,7 +190,7 @@ func (cli *DockerCli) streamHelper(method, path string, setRawTerminal bool, in 
 			req.Header[k] = v
 		}
 	}
-	resp, err := cli.HTTPClient(proto, addr).Do(req)
+	resp, err := cli.HTTPClient(proto, addr, tlsConfig).Do(req)
 	if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			return fmt.Errorf("Cannot connect to the Docker daemon. Is 'docker -d' running on this host?")
@@ -243,7 +263,7 @@ func waitForExit(cli *DockerCli, containerId string) (int, error) {
 // getExitCode perform an inspect on the container. It returns
 // the running state and the exit code.
 func getExitCode(cli *DockerCli, containerId string) (bool, int, error) {
-	steam, _, err := cli.call("GET", "/containers/"+containerId+"/json", nil, false)
+	stream, _, err := cli.call("GET", "/containers/"+containerId+"/json", nil, false)
 	if err != nil {
 		// If we can't connect, then the daemon probably died.
 		if err != ErrConnectionRefused {
@@ -253,7 +273,7 @@ func getExitCode(cli *DockerCli, containerId string) (bool, int, error) {
 	}
 
 	var result engine.Env
-	if err := result.Decode(steam); err != nil {
+	if err := result.Decode(stream); err != nil {
 		return false, -1, err
 	}
 
@@ -265,7 +285,7 @@ func (cli *DockerCli) monitorTtySize(id string, isExec bool) error {
 	cli.resizeTty(id, isExec)
 
 	sigchan := make(chan os.Signal, 1)
-	gosignal.Notify(sigchan, syscall.SIGWINCH)
+	gosignal.Notify(sigchan, signal.SIGWINCH)
 	go func() {
 		for _ = range sigchan {
 			cli.resizeTty(id, isExec)

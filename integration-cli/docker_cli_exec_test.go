@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -29,6 +30,46 @@ func TestExec(t *testing.T) {
 	deleteAllContainers()
 
 	logDone("exec - basic test")
+}
+
+func TestExecInteractiveStdinClose(t *testing.T) {
+	defer deleteAllContainers()
+	out, _, err := runCommandWithOutput(exec.Command(dockerBinary, "run", "-itd", "busybox", "/bin/cat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contId := strings.TrimSpace(out)
+
+	returnchan := make(chan struct{})
+
+	go func() {
+		var err error
+		cmd := exec.Command(dockerBinary, "exec", "-i", contId, "/bin/ls", "/")
+		cmd.Stdin = os.Stdin
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatal(err, out)
+		}
+
+		if string(out) == "" {
+			t.Fatalf("Output was empty, likely blocked by standard input")
+		}
+
+		returnchan <- struct{}{}
+	}()
+
+	select {
+	case <-returnchan:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out running docker exec")
+	}
+
+	logDone("exec - interactive mode closes stdin after execution")
 }
 
 func TestExecInteractive(t *testing.T) {
@@ -144,4 +185,31 @@ func TestExecAfterDaemonRestart(t *testing.T) {
 	}
 
 	logDone("exec - exec running container after daemon restart")
+}
+
+// Regresssion test for #9155, #9044
+func TestExecEnv(t *testing.T) {
+	defer deleteAllContainers()
+
+	runCmd := exec.Command(dockerBinary, "run",
+		"-e", "LALA=value1",
+		"-e", "LALA=value2",
+		"-d", "--name", "testing", "busybox", "top")
+	if out, _, _, err := runCommandWithStdoutStderr(runCmd); err != nil {
+		t.Fatal(out, err)
+	}
+
+	execCmd := exec.Command(dockerBinary, "exec", "testing", "env")
+	out, _, err := runCommandWithOutput(execCmd)
+	if err != nil {
+		t.Fatal(out, err)
+	}
+
+	if strings.Contains(out, "LALA=value1") ||
+		!strings.Contains(out, "LALA=value2") ||
+		!strings.Contains(out, "HOME=/root") {
+		t.Errorf("exec env(%q), expect %q, %q", out, "LALA=value2", "HOME=/root")
+	}
+
+	logDone("exec - exec inherits correct env")
 }

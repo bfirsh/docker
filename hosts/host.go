@@ -1,6 +1,7 @@
 package hosts
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -9,8 +10,9 @@ import (
 	"regexp"
 	"strings"
 
+	log "github.com/Sirupsen/logrus"
+	"github.com/docker/docker/api/client/auth"
 	"github.com/docker/docker/hosts/drivers"
-	"github.com/docker/docker/pkg/log"
 )
 
 var (
@@ -22,6 +24,7 @@ type Host struct {
 	Name       string `json:"-"`
 	DriverName string
 	Driver     drivers.Driver
+	AuthMethod auth.AuthMethod
 	storePath  string
 }
 
@@ -73,9 +76,6 @@ func ValidateHostName(name string) (string, error) {
 
 func (h *Host) Create() error {
 	if err := h.Driver.Create(); err != nil {
-		if rmErr := h.removeStorePath(); rmErr != nil {
-			log.Errorf("Error cleaning up: %s", rmErr)
-		}
 		return err
 	}
 	if err := h.SaveConfig(); err != nil {
@@ -118,17 +118,28 @@ func (h *Host) GetURL() (string, error) {
 	return h.Driver.GetURL()
 }
 
-// GetProtoAddr returns the protocol and address based on the URL
-func (h *Host) GetProtoAddr() (proto, addr string, err error) {
+// GetConnectionDetails returns the protocol, address and tls.Config object to
+// connect to this host with
+func (h *Host) GetConnectionDetails() (proto, addr string, tlsConfig *tls.Config, err error) {
 	url, err := h.GetURL()
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	parts := strings.SplitN(url, "://", 2)
 	if len(parts) == 1 {
-		return "", "", fmt.Errorf("The URL for host %q is not valid: %s", h.Name, url)
+		return "", "", nil, fmt.Errorf("The URL for host %q is not valid: %s", h.Name, url)
 	}
-	return parts[0], parts[1], nil
+	proto = parts[0]
+	addr = parts[1]
+
+	if h.AuthMethod != nil && proto != "unix" {
+		tlsConfig, err = h.AuthMethod.TLSConfig(proto, addr)
+		if err != nil {
+			return "", "", nil, err
+		}
+	}
+
+	return proto, addr, tlsConfig, nil
 }
 
 func (h *Host) LoadConfig() error {
@@ -158,7 +169,7 @@ func (h *Host) LoadConfig() error {
 }
 
 func (h *Host) SaveConfig() error {
-	if h.Name == "default" {
+	if h.IsDefault() {
 		return fmt.Errorf("Default host's config cannot be saved")
 	}
 	data, err := json.Marshal(h)
@@ -169,4 +180,8 @@ func (h *Host) SaveConfig() error {
 		return err
 	}
 	return nil
+}
+
+func (h *Host) IsDefault() bool {
+	return h.Name == "default"
 }
