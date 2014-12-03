@@ -265,6 +265,10 @@ func (d *Driver) Restart() error {
 	return nil
 }
 
+func (d *Driver) Upgrade() error {
+	return errors.New("Not supported yet")
+}
+
 func (d *Driver) Kill() error {
 	return d.Remove()
 }
