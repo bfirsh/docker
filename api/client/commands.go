@@ -32,6 +32,7 @@ import (
 	"github.com/docker/docker/hosts/drivers"
 	_ "github.com/docker/docker/hosts/drivers/azure"
 	_ "github.com/docker/docker/hosts/drivers/digitalocean"
+	_ "github.com/docker/docker/hosts/drivers/gce"
 	_ "github.com/docker/docker/hosts/drivers/none"
 	_ "github.com/docker/docker/hosts/drivers/virtualbox"
 	"github.com/docker/docker/nat"
