@@ -8,10 +8,10 @@ import (
 	"path"
 	"strings"
 
+	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/hosts/drivers"
 	"github.com/docker/docker/hosts/ssh"
 	"github.com/docker/docker/hosts/state"
-	"github.com/docker/docker/pkg/log"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/utils"
 
