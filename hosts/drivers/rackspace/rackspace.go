@@ -273,8 +273,8 @@ func (d *Driver) Kill() error {
 	return d.Remove()
 }
 
-func (d *Driver) GetSSHCommand(args ...string) *exec.Cmd {
-	return ssh.GetSSHCommand(d.ServerIPAddr, 22, d.ServerUsername, d.sshKeyPath(), args...)
+func (d *Driver) GetSSHCommand(args ...string) (*exec.Cmd, error) {
+	return ssh.GetSSHCommand(d.ServerIPAddr, 22, d.ServerUsername, d.sshKeyPath(), args...), nil
 }
 
 func (d *Driver) authenticate() (*gophercloud.ServiceClient, error) {
@@ -599,7 +599,12 @@ func (d *Driver) setupDocker() error {
 		// probe fails, which would keep us from being able to tell the difference between
 		// connection problems and a failed probe.
 		probeCmd := fmt.Sprintf(`%s && echo -n "yes" || echo -n "no"`, probe)
-		output, err := d.GetSSHCommand(probeCmd).Output()
+		sshCmd, err := d.GetSSHCommand(probeCmd)
+		if err != nil {
+			buildErr = err
+			break
+		}
+		output, err := sshCmd.Output()
 		if err != nil {
 			buildErr = err
 			break
@@ -693,7 +698,11 @@ func (d *Driver) setupDockerCoreOS() error {
 
 func (d *Driver) sshAll(commands []string) error {
 	for _, command := range commands {
-		if err := d.GetSSHCommand(command).Run(); err != nil {
+		sshCmd, err := d.GetSSHCommand(command)
+		if err != nil {
+			return err
+		}
+		if err := sshCmd.Run(); err != nil {
 			return err
 		}
 	}
