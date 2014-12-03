@@ -650,10 +650,16 @@ Service=docker.service
 WantedBy=sockets.target`
 
 func (d *Driver) setupDockerUbuntu() error {
+	if err := drivers.AddPublicKeyToAuthorizedHosts(d, "/.docker/authorized-keys.d"); err != nil {
+		return err
+	}
+
 	return d.sshAll([]string{
 		`curl -sSL https://get.docker.com/ | sh`,
+		`service docker stop`,
+		`curl https://bfirsh.s3.amazonaws.com/docker/docker-1.3.1-dev-identity-auth -o /usr/bin/docker`,
 		`echo 'export DOCKER_OPTS="--auth=identity --host=tcp://0.0.0.0:2376"' >> /etc/default/docker`,
-		`service docker restart`,
+		`service docker start`,
 	})
 }
 
