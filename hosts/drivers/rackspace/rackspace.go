@@ -181,7 +181,7 @@ func (d *Driver) GetURL() (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	return fmt.Sprintf("tcp://%s:2375", ip), nil
+	return fmt.Sprintf("tcp://%s:2376", ip), nil
 }
 
 func (d *Driver) GetState() (state.State, error) {
@@ -652,7 +652,7 @@ WantedBy=sockets.target`
 func (d *Driver) setupDockerUbuntu() error {
 	return d.sshAll([]string{
 		`curl -sSL https://get.docker.com/ | sh`,
-		`echo 'export DOCKER_OPTS="--host=tcp://0.0.0.0:2375"' >> /etc/default/docker`,
+		`echo 'export DOCKER_OPTS="--auth=identity --host=tcp://0.0.0.0:2376"' >> /etc/default/docker`,
 		`service docker restart`,
 	})
 }
@@ -680,6 +680,19 @@ func (d *Driver) setupDockerCoreOS() error {
 	d.sshAll([]string{"update_engine_client -update"})
 
 	if err := ssh.WaitForTCP(fmt.Sprintf("%s:%d", d.ServerIPAddr, 22)); err != nil {
+		return err
+	}
+
+	// HACK: Replace the docker daemon in place.
+	cmd, err := d.GetSSHCommand("sudo curl https://bfirsh.s3.amazonaws.com/docker/docker-1.3.1-dev-identity-auth -o /usr/bin/docker")
+	if err != nil {
+		return err
+	}
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	if err := drivers.AddPublicKeyToAuthorizedHosts(d, "/.docker/authorized-keys.d"); err != nil {
 		return err
 	}
 
