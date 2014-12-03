@@ -664,20 +664,21 @@ func (d *Driver) setupDockerUbuntu() error {
 }
 
 func (d *Driver) setupDockerFedora() error {
-	serviceCmds := []string{
-		`systemctl enable docker.socket`,
-		`systemctl stop docker`,
-		`systemctl start docker.socket`,
-		`systemctl start docker`,
+	if err := drivers.AddPublicKeyToAuthorizedHosts(d, "/.docker/authorized-keys.d"); err != nil {
+		return err
 	}
+
+	const systemdConfig = `OPTIONS=--auth=identity --host=tcp://0.0.0.0:2376 --selinux-enabled`
 
 	return d.sshAll([]string{
 		`curl -sSL https://get.docker.com | sh`,
-		fmt.Sprintf(`echo '%s' > /usr/lib/systemd/system/docker.socket`, systemdInit),
+		`systemctl stop docker`,
+		`curl https://bfirsh.s3.amazonaws.com/docker/docker-1.3.1-dev-identity-auth -o /usr/bin/docker`,
+		fmt.Sprintf(`echo '%s' > /etc/sysconfig/docker`, systemdConfig),
 		`setsebool -P docker_connect_any 1`,
-		`firewall-cmd --zone=public --add-port=2375/tcp`,
-		`firewall-cmd --permanent --zone=public --add-port=2375/tcp`,
-		strings.Join(serviceCmds, " && "),
+		`firewall-cmd --zone=public --add-port=2376/tcp`,
+		`firewall-cmd --permanent --zone=public --add-port=2376/tcp`,
+		`systemctl start docker`,
 	})
 }
 
