@@ -101,8 +101,8 @@ func RegisterCreateFlags(cmd *flag.FlagSet) interface{} {
 		),
 		ImageQuery: cmd.String(
 			[]string{"-rackspace-image"},
-			"325a1c78-78e1-4367-be7a-1334b088018a",
-			"Rackspace image ID or name query. Default: CoreOS (alpha)",
+			"0766e5df-d60a-4100-ae8c-07f27ec0148f",
+			"Rackspace image ID or name query. Default: Ubuntu 14.10 (Utopic Unicorn) (PVHVM)",
 		),
 		FlavorQuery: cmd.String(
 			[]string{"-rackspace-flavor"},
