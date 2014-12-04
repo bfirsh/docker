@@ -99,6 +99,7 @@ func init() {
 			{"exec", "Run a command in a running container"},
 			{"export", "Stream the contents of a container as a tar archive"},
 			{"history", "Show the history of an image"},
+			{"hosts", "Create and manage hosts running Docker"},
 			{"images", "List images"},
 			{"import", "Create a new filesystem image from the contents of a tarball"},
 			{"info", "Display system-wide information"},
