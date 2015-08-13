@@ -204,7 +204,7 @@ func customFormat(ctx Context, containers []types.Container) {
 			header = containerCtx.fullHeader()
 		}
 
-		t := tabwriter.NewWriter(ctx.Output, 20, 1, 3, ' ', 0)
+		t := tabwriter.NewWriter(ctx.Output, 5, 0, 3, ' ', 0)
 		t.Write([]byte(header))
 		t.Write([]byte("\n"))
 		buffer.WriteTo(t)

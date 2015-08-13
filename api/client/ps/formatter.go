@@ -10,7 +10,7 @@ const (
 	tableFormatKey = "table"
 	rawFormatKey   = "raw"
 
-	defaultTableFormat = "table {{.ID}}\t{{.Image}}\t{{.Command}}\t{{.RunningFor}} ago\t{{.Status}}\t{{.Ports}}\t{{.Names}}"
+	defaultTableFormat = "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\t{{.Command}}"
 	defaultQuietFormat = "{{.ID}}"
 )
 
