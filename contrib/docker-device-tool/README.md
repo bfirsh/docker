@@ -8,7 +8,7 @@ Compile
 
     $ make shell
     ## inside build container
-    $ go build contrib/docker-device-tool/device_tool.go
+    $ go build -tags libdm_deferred_remove contrib/docker-device-tool/device_tool.go
 
-    # if devicemapper version is old and compliation fails, compile with `libdm_no_deferred_remove` tag
-    $ go build -tags libdm_no_deferred_remove contrib/docker-device-tool/device_tool.go
+    # if devicemapper version is old and compliation fails, compile without `libdm_deferred_remove` tag
+    $ go build contrib/docker-device-tool/device_tool.go

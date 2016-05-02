@@ -154,9 +154,9 @@ fi
 # functionality.
 if \
 	command -v gcc &> /dev/null \
-	&& ! ( echo -e  '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }'| gcc -xc - -o /dev/null -ldevmapper &> /dev/null ) \
+	&& echo -e  '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }'| gcc -xc - -o /dev/null -ldevmapper &> /dev/null \
 ; then
-       DOCKER_BUILDTAGS+=' libdm_no_deferred_remove'
+       DOCKER_BUILDTAGS+=' libdm_deferred_remove'
 fi
 
 # Use these flags when compiling the tests and final binary
