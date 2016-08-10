@@ -41,7 +41,7 @@ func (r *containerRouter) initRoutes() {
 		// HEAD
 		router.NewHeadRoute("/containers/{name:.*}/archive", r.headContainersArchive),
 		// GET
-		router.NewGetRoute("/containers/json", r.getContainersJSON),
+		router.NewGetRoute("/containers/json", r.getContainers),
 		router.NewGetRoute("/containers/{name:.*}/export", r.getContainersExport),
 		router.NewGetRoute("/containers/{name:.*}/changes", r.getContainersChanges),
 		router.NewGetRoute("/containers/{name:.*}/json", r.getContainersByName),
@@ -63,11 +63,11 @@ func (r *containerRouter) initRoutes() {
 		router.NewPostRoute("/containers/{name:.*}/resize", r.postContainersResize),
 		router.NewPostRoute("/containers/{name:.*}/attach", r.postContainersAttach),
 		router.NewPostRoute("/containers/{name:.*}/copy", r.postContainersCopy), // Deprecated since 1.8, Errors out since 1.12
-		router.NewPostRoute("/containers/{name:.*}/exec", r.postContainerExecCreate),
-		router.NewPostRoute("/exec/{name:.*}/start", r.postContainerExecStart),
-		router.NewPostRoute("/exec/{name:.*}/resize", r.postContainerExecResize),
-		router.NewPostRoute("/containers/{name:.*}/rename", r.postContainerRename),
-		router.NewPostRoute("/containers/{name:.*}/update", r.postContainerUpdate),
+		router.NewPostRoute("/containers/{name:.*}/exec", r.postContainersExecCreate),
+		router.NewPostRoute("/exec/{name:.*}/start", r.postContainersExecStart),
+		router.NewPostRoute("/exec/{name:.*}/resize", r.postContainersExecResize),
+		router.NewPostRoute("/containers/{name:.*}/rename", r.postContainersRename),
+		router.NewPostRoute("/containers/{name:.*}/update", r.postContainersUpdate),
 		// PUT
 		router.NewPutRoute("/containers/{name:.*}/archive", r.putContainersArchive),
 		// DELETE

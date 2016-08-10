@@ -23,7 +23,7 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-func (s *containerRouter) getContainersJSON(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+func (s *containerRouter) getContainers(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
@@ -290,7 +290,7 @@ func (s *containerRouter) getContainersTop(ctx context.Context, w http.ResponseW
 	return httputils.WriteJSON(w, http.StatusOK, procList)
 }
 
-func (s *containerRouter) postContainerRename(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+func (s *containerRouter) postContainersRename(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
@@ -304,7 +304,7 @@ func (s *containerRouter) postContainerRename(ctx context.Context, w http.Respon
 	return nil
 }
 
-func (s *containerRouter) postContainerUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
+func (s *containerRouter) postContainersUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
 	}
