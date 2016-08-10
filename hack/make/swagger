@@ -1,0 +1,3 @@
+#!/bin/bash
+export DEBUG=1
+swagger generate spec -b github.com/docker/docker/cmd/dockerd | jq .

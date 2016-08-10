@@ -14,6 +14,24 @@ import (
 	"golang.org/x/net/context"
 )
 
+// swarm:parameters initCluster
+type initClusterRequest struct {
+	// in: body
+	Body *types.InitRequest
+}
+
+// swagger:route POST /swarm/init swarm initCluster
+//
+// Initialize a new swarm
+//
+// Consumes:
+// - application/json
+// Produces:
+// - application/json
+// Responses:
+//   200: noError
+//   400: body:ErrorResponse
+//   406: body:ErrorResponse
 func (sr *swarmRouter) initCluster(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var req types.InitRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -27,6 +45,24 @@ func (sr *swarmRouter) initCluster(ctx context.Context, w http.ResponseWriter, r
 	return httputils.WriteJSON(w, http.StatusOK, nodeID)
 }
 
+// swagger:parameters joinCluster
+type joinClusterRequest struct {
+	// in: body
+	Body *types.JoinRequest
+}
+
+// swagger:route POST /swarm/join swarm joinCluster
+//
+// Join an existing swarm
+//
+// Consumes:
+// - application/json
+// Produces:
+// - application/json
+// Responses:
+//   200: noError
+//   400: body:ErrorResponse
+//   406: body:ErrorResponse
 func (sr *swarmRouter) joinCluster(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var req types.JoinRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -35,6 +71,16 @@ func (sr *swarmRouter) joinCluster(ctx context.Context, w http.ResponseWriter, r
 	return sr.backend.Join(req)
 }
 
+// swagger:route POST /swarm/leave swarm joinCluster
+//
+// Leave a swarm.
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: noError
+//   400: body:ErrorResponse
+//   406: body:ErrorResponse
 func (sr *swarmRouter) leaveCluster(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -44,6 +90,15 @@ func (sr *swarmRouter) leaveCluster(ctx context.Context, w http.ResponseWriter, 
 	return sr.backend.Leave(force)
 }
 
+// swagger:route GET /swarm swarm inspectCluster
+//
+// Inspect a swarm.
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: TODO
+//   500: body:ErrorResponse
 func (sr *swarmRouter) inspectCluster(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	swarm, err := sr.backend.Inspect()
 	if err != nil {
@@ -54,6 +109,19 @@ func (sr *swarmRouter) inspectCluster(ctx context.Context, w http.ResponseWriter
 	return httputils.WriteJSON(w, http.StatusOK, swarm)
 }
 
+// swagger:route POST /swarm/update swarm updateCluster
+//
+// Update a swarm.
+//
+// Consumes:
+// - application/json
+// Produces:
+// - application/json
+// Responses:
+//   200: noError
+//   400: body:ErrorResponse
+//   406: body:ErrorResponse
+//   500: body:ErrorResponse
 func (sr *swarmRouter) updateCluster(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var swarm types.Spec
 	if err := json.NewDecoder(r.Body).Decode(&swarm); err != nil {
@@ -93,6 +161,21 @@ func (sr *swarmRouter) updateCluster(ctx context.Context, w http.ResponseWriter,
 	return nil
 }
 
+// TODO:response
+type serviceListResponse struct {
+	// in: body
+	Body []*types.Service
+}
+
+// swagger:route GET /services services getServices
+//
+// List services
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: TODO
+//   500: body:ErrorResponse
 func (sr *swarmRouter) getServices(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -111,6 +194,16 @@ func (sr *swarmRouter) getServices(ctx context.Context, w http.ResponseWriter, r
 	return httputils.WriteJSON(w, http.StatusOK, services)
 }
 
+// swagger:route GET /services/{id} services getService
+//
+// Return information on a service.
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: TODO
+//   404: body:ErrorResponse
+//   500: body:ErrorResponse
 func (sr *swarmRouter) getService(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	service, err := sr.backend.GetService(vars["id"])
 	if err != nil {
@@ -121,6 +214,19 @@ func (sr *swarmRouter) getService(ctx context.Context, w http.ResponseWriter, r 
 	return httputils.WriteJSON(w, http.StatusOK, service)
 }
 
+// swagger:route POST /services/create services createService
+//
+// Create a service
+//
+// Consumes:
+// - application/json
+// Produces:
+// - application/json
+// Responses:
+//   201: body:ServiceCreateResponse
+//   406: body:ErrorResponse
+//   409: body:ErrorResponse
+//   500: body:ErrorResponse
 func (sr *swarmRouter) createService(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var service types.ServiceSpec
 	if err := json.NewDecoder(r.Body).Decode(&service); err != nil {
@@ -141,6 +247,18 @@ func (sr *swarmRouter) createService(ctx context.Context, w http.ResponseWriter,
 	})
 }
 
+// swagger:route POST /services/{id}/update services updateService
+//
+// Update a service
+//
+// Consumes:
+// - application/json
+// Produces:
+// - application/json
+// Responses:
+//   200: noError
+//   404: body:ErrorResponse
+//   500: body:ErrorResponse
 func (sr *swarmRouter) updateService(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var service types.ServiceSpec
 	if err := json.NewDecoder(r.Body).Decode(&service); err != nil {
@@ -163,6 +281,16 @@ func (sr *swarmRouter) updateService(ctx context.Context, w http.ResponseWriter,
 	return nil
 }
 
+// swagger:route DELETE /services/{id} services removeService
+//
+// Stop and remove a service
+//
+// Produces:
+// - application/json
+// Responses:
+//   204: noError
+//   404: body:ErrorResponse
+//   500: body:ErrorResponse
 func (sr *swarmRouter) removeService(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := sr.backend.RemoveService(vars["id"]); err != nil {
 		logrus.Errorf("Error removing service %s: %v", vars["id"], err)
@@ -171,6 +299,21 @@ func (sr *swarmRouter) removeService(ctx context.Context, w http.ResponseWriter,
 	return nil
 }
 
+// TODO:response
+type getNodesResponse struct {
+	// in: body
+	Body []*types.Node
+}
+
+// swagger:route GET /nodes nodes getNodes
+//
+// List nodes
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: TODO
+//   500: body:ErrorResponse
 func (sr *swarmRouter) getNodes(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -189,6 +332,16 @@ func (sr *swarmRouter) getNodes(ctx context.Context, w http.ResponseWriter, r *h
 	return httputils.WriteJSON(w, http.StatusOK, nodes)
 }
 
+// swagger:route GET /nodes/{id} nodes getNode
+//
+// Inspect a node
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: TODO
+//   404: noError
+//   500: body:ErrorResponse
 func (sr *swarmRouter) getNode(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	node, err := sr.backend.GetNode(vars["id"])
 	if err != nil {
@@ -199,6 +352,18 @@ func (sr *swarmRouter) getNode(ctx context.Context, w http.ResponseWriter, r *ht
 	return httputils.WriteJSON(w, http.StatusOK, node)
 }
 
+// swagger:route POST /nodes/{id}/update nodes updateNode
+//
+// Update a node
+//
+// Consumes:
+// - application/json
+// Produces:
+// - application/json
+// Responses:
+//   200: TODO
+//   404: body:ErrorResponse
+//   500: body:ErrorResponse
 func (sr *swarmRouter) updateNode(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var node types.NodeSpec
 	if err := json.NewDecoder(r.Body).Decode(&node); err != nil {
@@ -218,6 +383,16 @@ func (sr *swarmRouter) updateNode(ctx context.Context, w http.ResponseWriter, r 
 	return nil
 }
 
+// swagger:route DELETE /nodes/{id} nodes removeNode
+//
+// Remove a node
+//
+// Produces:
+// - application/json
+// Responses:
+//   204: noError
+//   404: body:ErrorResponse
+//   500: body:ErrorResponse
 func (sr *swarmRouter) removeNode(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := sr.backend.RemoveNode(vars["id"]); err != nil {
 		logrus.Errorf("Error removing node %s: %v", vars["id"], err)
@@ -226,6 +401,21 @@ func (sr *swarmRouter) removeNode(ctx context.Context, w http.ResponseWriter, r 
 	return nil
 }
 
+// TODO:response
+type getTasksResponse struct {
+	// in: body
+	Body []*types.Task
+}
+
+// swagger:route GET /tasks tasks getTasks
+//
+// List tasks
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: TODO
+//   500: body:ErrorResponse
 func (sr *swarmRouter) getTasks(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -244,6 +434,16 @@ func (sr *swarmRouter) getTasks(ctx context.Context, w http.ResponseWriter, r *h
 	return httputils.WriteJSON(w, http.StatusOK, tasks)
 }
 
+// swagger:route GET /tasks/{id} tasks getTask
+//
+// Inspect a task
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: TODO
+//   404: noError
+//   500: body:ErrorResponse
 func (sr *swarmRouter) getTask(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	task, err := sr.backend.GetTask(vars["id"])
 	if err != nil {

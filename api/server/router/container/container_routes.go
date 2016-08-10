@@ -23,6 +23,22 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+// swagger:response
+type containersListResponse struct {
+	// in: body
+	Body []types.Container
+}
+
+// swagger:route GET /containers/json containers getContainers
+//
+// List containers
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: containersListResponse
+//     400: body:BadParameterError
+//     500: body:InternalServerError
 func (s *containerRouter) getContainers(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -56,6 +72,16 @@ func (s *containerRouter) getContainers(ctx context.Context, w http.ResponseWrit
 	return httputils.WriteJSON(w, http.StatusOK, containers)
 }
 
+// swagger:route GET /containers/{id}/stats containers getContainersStats
+//
+// Get container stats
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) getContainersStats(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -75,6 +101,17 @@ func (s *containerRouter) getContainersStats(ctx context.Context, w http.Respons
 	return s.backend.ContainerStats(ctx, vars["name"], config)
 }
 
+// swagger:route GET /containers/{id}/logs containers getContainersLogs
+//
+// Get container logs
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     101: noError
+//     200: noError
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) getContainersLogs(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -120,10 +157,32 @@ func (s *containerRouter) getContainersLogs(ctx context.Context, w http.Response
 	return nil
 }
 
+// swagger:route GET /containers/{id}/export containers getContainersExport
+//
+// Export the contents of a container
+//
+//   Produces:
+//   - application/octet-stream
+//   - application/json
+//   Responses:
+//     200: noError
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) getContainersExport(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	return s.backend.ContainerExport(vars["name"], w)
 }
 
+// swagger:route POST /containers/{id}/start containers postContainersStart
+//
+// Start a container
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     204: noError
+//     304: body:ErrorResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersStart(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	// If contentLength is -1, we can assumed chunked encoding
 	// or more technically that the length is unknown
@@ -159,6 +218,17 @@ func (s *containerRouter) postContainersStart(ctx context.Context, w http.Respon
 	return nil
 }
 
+// swagger:route POST /containers/{id}/stop containers postContainersStop
+//
+// Stop a container
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     204: noError
+//     304: body:ErrorResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersStop(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -178,6 +248,17 @@ type errContainerIsRunning interface {
 	ContainerIsRunning() bool
 }
 
+// swagger:route POST /containers/{id}/kill containers postContainersKill
+//
+// Kill a container
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     204: noError
+//     304: body:ErrorResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersKill(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -213,6 +294,16 @@ func (s *containerRouter) postContainersKill(ctx context.Context, w http.Respons
 	return nil
 }
 
+// swagger:route POST /containers/{id}/restart containers postContainersRestart
+//
+// Restart a container
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     204: noError
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersRestart(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -229,6 +320,16 @@ func (s *containerRouter) postContainersRestart(ctx context.Context, w http.Resp
 	return nil
 }
 
+// swagger:route POST /containers/{id}/pause containers postContainersPause
+//
+// Pause a container
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     204: noError
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersPause(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -243,6 +344,16 @@ func (s *containerRouter) postContainersPause(ctx context.Context, w http.Respon
 	return nil
 }
 
+// swagger:route POST /containers/{id}/unpause containers postContainersUnpause
+//
+// Unpause a container
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     204: noError
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersUnpause(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -257,6 +368,16 @@ func (s *containerRouter) postContainersUnpause(ctx context.Context, w http.Resp
 	return nil
 }
 
+// swagger:route POST /containers/{id}/wait containers postContainersWait
+//
+// Block until a container stops, then return the exit code
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:ContainerWaitResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersWait(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	status, err := s.backend.ContainerWait(vars["name"], -1*time.Second)
 	if err != nil {
@@ -268,6 +389,22 @@ func (s *containerRouter) postContainersWait(ctx context.Context, w http.Respons
 	})
 }
 
+// swagger:response
+type containersChangeResponse struct {
+	// in: body
+	Body []types.ContainerChange
+}
+
+// swagger:route GET /containers/{id}/changes containers getContainersChanges
+//
+// Inspect changes on a container's filesystem
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: containersChangeResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) getContainersChanges(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	changes, err := s.backend.ContainerChanges(vars["name"])
 	if err != nil {
@@ -277,6 +414,18 @@ func (s *containerRouter) getContainersChanges(ctx context.Context, w http.Respo
 	return httputils.WriteJSON(w, http.StatusOK, changes)
 }
 
+// swagger:route GET /containers/{id}/top containers getContainersTop
+//
+// List processes running inside a container
+//
+// On Unix systems this is done by running the ps command. This endpoint is not supported on Windows.
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:ContainerProcessList
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) getContainersTop(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -290,6 +439,17 @@ func (s *containerRouter) getContainersTop(ctx context.Context, w http.ResponseW
 	return httputils.WriteJSON(w, http.StatusOK, procList)
 }
 
+// swagger:route POST /containers/{id}/rename containers postContainersRename
+//
+// Change the name of a container
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     204: noError
+//     404: body:ErrorResponse
+//     409: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersRename(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -304,6 +464,19 @@ func (s *containerRouter) postContainersRename(ctx context.Context, w http.Respo
 	return nil
 }
 
+// swagger:route POST /containers/{id}/update containers postContainersUpdate
+//
+// Update configuration of a container
+//
+//   Consumes:
+//   - application/json
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:ContainerUpdateResponse
+//     400: body:ErrorResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -337,6 +510,21 @@ func (s *containerRouter) postContainersUpdate(ctx context.Context, w http.Respo
 	})
 }
 
+// swagger:route POST /containers/{id}/create containers postContainersCreate
+//
+// Create a container
+//
+//   Consumes:
+//   - application/json
+//   Produces:
+//   - application/json
+//   Responses:
+//     201: body:ContainerCreateResponse
+//     400: body:ErrorResponse
+//     404: body:ErrorResponse
+//     406: body:ErrorResponse
+//     409: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersCreate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -369,6 +557,18 @@ func (s *containerRouter) postContainersCreate(ctx context.Context, w http.Respo
 	return httputils.WriteJSON(w, http.StatusCreated, ccr)
 }
 
+// swagger:route DELETE /containers/{id} containers deleteContainers
+//
+// Delete a container
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     204: noError
+//     400: body:ErrorResponse
+//     404: body:ErrorResponse
+//     409: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) deleteContainers(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -394,6 +594,18 @@ func (s *containerRouter) deleteContainers(ctx context.Context, w http.ResponseW
 	return nil
 }
 
+// swagger:route POST /containers/{id}/resize containers postContainersResize
+//
+// Resize the TTY for a container
+//
+// The unit is number of characters. You must restart the container for the resize to take effect.
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersResize(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -411,6 +623,19 @@ func (s *containerRouter) postContainersResize(ctx context.Context, w http.Respo
 	return s.backend.ContainerResize(vars["name"], height, width)
 }
 
+// swagger:route POST /containers/{id}/attach containers postContainersAttach
+//
+// Attach to a container
+//
+//   Produces:
+//	 - application/vnd.docker.raw-stream
+//   - application/json
+//   Responses:
+//     101: noError
+//     200: noError
+//     400: body:ErrorResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) postContainersAttach(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	err := httputils.ParseForm(r)
 	if err != nil {
@@ -475,6 +700,17 @@ func (s *containerRouter) postContainersAttach(ctx context.Context, w http.Respo
 	return nil
 }
 
+// swagger:route GET /containers/{id}/attach/ws containers wsContainersAttach
+//
+// Attach to a container via a websocket
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     400: body:ErrorResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *containerRouter) wsContainersAttach(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err

@@ -108,6 +108,17 @@ func (s *syncWriter) Write(b []byte) (count int, err error) {
 	return
 }
 
+// swagger:route POST /build build postBuild
+//
+// Build an image from a Dockerfile
+//
+//   Consumes:
+//   - application/x-tar
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     500: body:ErrorResponse
 func (br *buildRouter) postBuild(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var (
 		authConfigs        = map[string]types.AuthConfig{}

@@ -9,6 +9,15 @@ import (
 	"golang.org/x/net/context"
 )
 
+// swagger:route GET /volumes volumes getVolumesList
+//
+// List volumes
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: body:VolumesListResponse
+//   500: body:ErrorResponse
 func (v *volumeRouter) getVolumesList(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -21,6 +30,16 @@ func (v *volumeRouter) getVolumesList(ctx context.Context, w http.ResponseWriter
 	return httputils.WriteJSON(w, http.StatusOK, &types.VolumesListResponse{Volumes: volumes, Warnings: warnings})
 }
 
+// swagger:route GET /volumes/{name} volumes getVolumeByName
+//
+// Get detailed information about a volume
+//
+// Produces:
+// - application/json
+// Responses:
+//   200: body:Volume
+//   404: body:ErrorResponse
+//   500: body:ErrorResponse
 func (v *volumeRouter) getVolumeByName(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -33,6 +52,17 @@ func (v *volumeRouter) getVolumeByName(ctx context.Context, w http.ResponseWrite
 	return httputils.WriteJSON(w, http.StatusOK, volume)
 }
 
+// swagger:route POST /volumes/create volumes postVolumesCreate
+//
+// Create a volume
+//
+// Consumes:
+// - application/json
+// Produces:
+// - application/json
+// Responses:
+//   201: noError
+//   500: body:ErrorResponse
 func (v *volumeRouter) postVolumesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -54,6 +84,17 @@ func (v *volumeRouter) postVolumesCreate(ctx context.Context, w http.ResponseWri
 	return httputils.WriteJSON(w, http.StatusCreated, volume)
 }
 
+// swagger:route DELETE /volumes/{name} volumes deleteVolumes
+//
+// Remove a volume
+//
+// Produces:
+// - application/json
+// Responses:
+//   204: noError
+//   404: body:ErrorResponse
+//   409: body:ErrorResponse
+//   500: body:ErrorResponse
 func (v *volumeRouter) deleteVolumes(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err

@@ -23,11 +23,31 @@ func optionsHandler(ctx context.Context, w http.ResponseWriter, r *http.Request,
 	return nil
 }
 
+// swagger:route GET /_ping misc pingHandler
+//
+// Ping the server
+//
+// This is a dummy endpoint you can use to test if the server is accessible.
+//
+//   Produces:
+//   - text/plain
+//   Responses:
+//     200: noError
+//     500: body:ErrorResponse
 func pingHandler(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	_, err := w.Write([]byte{'O', 'K'})
 	return err
 }
 
+// swagger:route GET /info misc getInfo
+//
+// Get system-wide information
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:Info
+//     500: body:ErrorResponse
 func (s *systemRouter) getInfo(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	info, err := s.backend.SystemInfo()
 	if err != nil {
@@ -40,6 +60,18 @@ func (s *systemRouter) getInfo(ctx context.Context, w http.ResponseWriter, r *ht
 	return httputils.WriteJSON(w, http.StatusOK, info)
 }
 
+// swagger:route GET /version misc getVersion
+//
+// Get Docker version
+//
+// This returns the version of Docker that is running and various information
+// about the system that Docker is running on.
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:Version
+//     500: body:ErrorResponse
 func (s *systemRouter) getVersion(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	info := s.backend.SystemVersion()
 	info.APIVersion = api.DefaultVersion
@@ -47,6 +79,18 @@ func (s *systemRouter) getVersion(ctx context.Context, w http.ResponseWriter, r 
 	return httputils.WriteJSON(w, http.StatusOK, info)
 }
 
+// swagger:route GET /events misc getEvents
+//
+// Monitor events
+//
+// Events are a stream of all the things that a Docker Engine is doing. They
+// can be received in real time with streaming, or by polling using the `since` // parameter.
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     500: body:ErrorResponse
 func (s *systemRouter) getEvents(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -125,6 +169,20 @@ func (s *systemRouter) getEvents(ctx context.Context, w http.ResponseWriter, r *
 	}
 }
 
+// swagger:route POST /auth misc postAuth
+//
+// Validate credentials for a registry
+
+// This validates the credentials for a registry and gets an identity token,
+// if available, for accessing the registry without password.
+//
+//   Consumes:
+//   - application/json
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:AuthResponse
+//     500: body:ErrorResponse
 func (s *systemRouter) postAuth(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var config *types.AuthConfig
 	err := json.NewDecoder(r.Body).Decode(&config)

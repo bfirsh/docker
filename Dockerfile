@@ -256,6 +256,19 @@ RUN set -x \
 	&& cp bin/ctr /usr/local/bin/docker-containerd-ctr \
 	&& rm -rf "$GOPATH"
 
+# Install swagger
+#RUN set -x \
+#    && curl -fsSL "https://github.com/go-swagger/go-swagger/releases/download/0.5.0/swagger_linux_amd64" -o /usr/local/bin/swagger \
+#    && chmod +x /usr/local/bin/swagger
+
+#ENV SWAGGER_COMMIT 7ed3bddd2c34f31fc14b31552fb4f6717b23e7f5
+#RUN git clone https://github.com/go-swagger/go-swagger.git /go/src/github.com/go-swagger/go-swagger \
+ENV SWAGGER_COMMIT d8884fdd886aa49f5148d518f570f5a33ab3cc67
+RUN git clone https://github.com/bfirsh/go-swagger.git /go/src/github.com/go-swagger/go-swagger \
+	&& (cd /go/src/github.com/go-swagger/go-swagger && git checkout -q $SWAGGER_COMMIT) \
+	&& go install -v github.com/go-swagger/go-swagger/cmd/swagger
+
+
 # Wrap all commands in the "docker-in-docker" script to allow nested containers
 ENTRYPOINT ["hack/dind"]
 

@@ -15,6 +15,21 @@ import (
 	"github.com/docker/libnetwork"
 )
 
+// swagger:response
+type getNetworksListResponse struct {
+	// in: body
+	Body []*types.NetworkResource
+}
+
+// swagger:route GET /networks networks getNetworksList
+//
+// List networks
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: getNetworksListResponse
+//     500: body:ErrorResponse
 func (n *networkRouter) getNetworksList(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -53,6 +68,16 @@ SKIP:
 	return httputils.WriteJSON(w, http.StatusOK, list)
 }
 
+// swagger:route GET /networks/{id} networks getNetwork
+//
+// Get a network
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:NetworkResource
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (n *networkRouter) getNetwork(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -68,6 +93,24 @@ func (n *networkRouter) getNetwork(ctx context.Context, w http.ResponseWriter, r
 	return httputils.WriteJSON(w, http.StatusOK, n.buildNetworkResource(nw))
 }
 
+// TODO:parameters postNetworkCreate
+type postNetworkCreateParameters struct {
+	// in: body
+	Body *types.NetworkCreateRequest
+}
+
+// swagger:route POST /networks/create networks postNetworkCreate
+//
+// Create a network
+//
+//   Consumes:
+//   - application/json
+//   Produces:
+//   - application/json
+//   Responses:
+//     201: TODO
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (n *networkRouter) postNetworkCreate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var create types.NetworkCreateRequest
 
@@ -102,6 +145,27 @@ func (n *networkRouter) postNetworkCreate(ctx context.Context, w http.ResponseWr
 	return httputils.WriteJSON(w, http.StatusCreated, nw)
 }
 
+// swagger:parameters postNetworkConnect
+type postNetworkConnectParameters struct {
+	// in: path
+	ID string `json:"id"`
+	// in: body
+	Body *types.NetworkConnect
+}
+
+// swagger:route POST /networks/{id}/connect networks postNetworkConnect
+//
+// Connect a container to a network
+//
+//   Consumes:
+//   - application/json
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     403: body:ErrorResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (n *networkRouter) postNetworkConnect(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var connect types.NetworkConnect
 	if err := httputils.ParseForm(r); err != nil {
@@ -129,6 +193,27 @@ func (n *networkRouter) postNetworkConnect(ctx context.Context, w http.ResponseW
 	return n.backend.ConnectContainerToNetwork(connect.Container, nw.Name(), connect.EndpointConfig)
 }
 
+// swagger:parameters postNetworkDisconnect
+type postNetworkDisconnectParameters struct {
+	// in: path
+	ID string `json:"id"`
+	// in: body
+	Body *types.NetworkDisconnect
+}
+
+// swagger:route POST /networks/{id}/disconnect networks postNetworkDisconnect
+//
+// Disconnect a container from a network
+//
+//   Consumes:
+//   - application/json
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     403: body:ErrorResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (n *networkRouter) postNetworkDisconnect(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var disconnect types.NetworkDisconnect
 	if err := httputils.ParseForm(r); err != nil {
@@ -156,6 +241,16 @@ func (n *networkRouter) postNetworkDisconnect(ctx context.Context, w http.Respon
 	return n.backend.DisconnectContainerFromNetwork(disconnect.Container, nw, disconnect.Force)
 }
 
+// swagger:route DELETE /networks/{id} networks deleteNetwork
+//
+// Delete a network
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     204: noError
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (n *networkRouter) deleteNetwork(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err

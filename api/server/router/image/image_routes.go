@@ -20,6 +20,18 @@ import (
 	"golang.org/x/net/context"
 )
 
+// swagger:route POST /commit images postCommit
+//
+// Create a new image from a container’s changes
+//
+//   Consumes:
+//   - application/json
+//   Produces:
+//   - application/json
+//   Responses:
+//     201: body:ContainerCommitResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *imageRouter) postCommit(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -68,7 +80,17 @@ func (s *imageRouter) postCommit(ctx context.Context, w http.ResponseWriter, r *
 	})
 }
 
-// Creates an image from Pull or from Import
+// swagger:route POST /images/create images postImagesCreate
+//
+// Create an image either by pulling it from the registry or by importing it
+//
+//   Consumes:
+//   - application/json
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     500: body:ErrorResponse
 func (s *imageRouter) postImagesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -124,6 +146,27 @@ func (s *imageRouter) postImagesCreate(ctx context.Context, w http.ResponseWrite
 	return nil
 }
 
+// swagger:route POST /images/{name}/push images postImagesCreate
+//
+// Push an image to the Docker Hub or a private registry
+//
+// If you wish to push an image on to a private registry, that image must
+// already have a tag into a repository which references that registry hostname
+// and port. This repository name should then be used in the URL. This
+// duplicates the command line’s flow.
+//
+// The push is cancelled if the HTTP connection is closed.
+//
+// TODO: refactor ImagePullOptions to use here
+//
+//   Consumes:
+//   - application/json
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *imageRouter) postImagesPush(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	metaHeaders := map[string][]string{}
 	for k, v := range r.Header {
@@ -169,6 +212,21 @@ func (s *imageRouter) postImagesPush(ctx context.Context, w http.ResponseWriter,
 	return nil
 }
 
+// swagger:route GET /images/{name}/get images getImagesGet
+//
+// Get a tarball containing all images and metadata for a repository
+//
+// If name is a specific name and tag (e.g. ubuntu:latest), then only that
+// image (and its parents) are returned. If name is an image ID, similarly only
+// that image (and its parents) are returned, but with the exclusion of the
+// ‘repositories’ file in the tarball, as there were no image names referenced.
+//
+//   Produces:
+//   - application/x-tar
+//   - application/json
+//   Responses:
+//     200: noError
+//     500: body:ErrorResponse
 func (s *imageRouter) getImagesGet(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -195,6 +253,17 @@ func (s *imageRouter) getImagesGet(ctx context.Context, w http.ResponseWriter, r
 	return nil
 }
 
+// swagger:route POST /images/load images postImagesLoad
+//
+// Load a set of images and tags into a Docker repository
+//
+//	 Consumes:
+//   - application/x-tar
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: noError
+//     500: body:ErrorResponse
 func (s *imageRouter) postImagesLoad(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -214,6 +283,23 @@ func (s *imageRouter) postImagesLoad(ctx context.Context, w http.ResponseWriter,
 	return s.backend.LoadImage(r.Body, w, quiet)
 }
 
+// swagger:response
+type deleteImagesResponse struct {
+	// in:body
+	Body []*types.ImageDelete
+}
+
+// swagger:route DELETE /images/{name} images deleteImages
+//
+// Remove an image
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: deleteImagesResponse
+//     404: body:ErrorResponse
+//     409: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *imageRouter) deleteImages(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -236,6 +322,16 @@ func (s *imageRouter) deleteImages(ctx context.Context, w http.ResponseWriter, r
 	return httputils.WriteJSON(w, http.StatusOK, list)
 }
 
+// swagger:route GET /images/{name}/json images getImagesByName
+//
+// Get detailed information about an image
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:ImageInspect
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *imageRouter) getImagesByName(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	imageInspect, err := s.backend.LookupImage(vars["name"])
 	if err != nil {
@@ -245,6 +341,15 @@ func (s *imageRouter) getImagesByName(ctx context.Context, w http.ResponseWriter
 	return httputils.WriteJSON(w, http.StatusOK, imageInspect)
 }
 
+// swagger:route GET /images/json images getImages
+//
+// List images
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:ImageInspect
+//     500: body:ErrorResponse
 func (s *imageRouter) getImages(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -259,6 +364,22 @@ func (s *imageRouter) getImages(ctx context.Context, w http.ResponseWriter, r *h
 	return httputils.WriteJSON(w, http.StatusOK, images)
 }
 
+// swagger:response
+type getImagesHistoryResponse struct {
+	// in: body
+	Body []*types.ImageHistory
+}
+
+// swagger:route GET /images/{name}/history images getImagesHistory
+//
+// Get the history of an image
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: getImagesHistoryResponse
+//     404: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *imageRouter) getImagesHistory(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	name := vars["name"]
 	history, err := s.backend.ImageHistory(name)
@@ -269,6 +390,18 @@ func (s *imageRouter) getImagesHistory(ctx context.Context, w http.ResponseWrite
 	return httputils.WriteJSON(w, http.StatusOK, history)
 }
 
+// swagger:route POST /images/{name}/tag images postImagesTag
+//
+// Tag an image with a repository
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     201: noError
+//     400: body:ErrorResponse
+//     404: body:ErrorResponse
+//     409: body:ErrorResponse
+//     500: body:ErrorResponse
 func (s *imageRouter) postImagesTag(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
@@ -280,6 +413,17 @@ func (s *imageRouter) postImagesTag(ctx context.Context, w http.ResponseWriter, 
 	return nil
 }
 
+// swagger:route GET /images/search images getImagesSearch
+//
+// Search for an image on Docker Hub
+//
+// TODO: is response actually correct?
+//
+//   Produces:
+//   - application/json
+//   Responses:
+//     200: body:SearchResults
+//     500: body:ErrorResponse
 func (s *imageRouter) getImagesSearch(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	if err := httputils.ParseForm(r); err != nil {
 		return err
