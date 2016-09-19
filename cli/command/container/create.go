@@ -109,56 +109,8 @@ func pullImage(ctx context.Context, dockerCli *command.DockerCli, image string, 
 		nil)
 }
 
-type cidFile struct {
-	path    string
-	file    *os.File
-	written bool
-}
-
-func (cid *cidFile) Close() error {
-	cid.file.Close()
-
-	if !cid.written {
-		if err := os.Remove(cid.path); err != nil {
-			return fmt.Errorf("failed to remove the CID file '%s': %s \n", cid.path, err)
-		}
-	}
-
-	return nil
-}
-
-func (cid *cidFile) Write(id string) error {
-	if _, err := cid.file.Write([]byte(id)); err != nil {
-		return fmt.Errorf("Failed to write the container ID to the file: %s", err)
-	}
-	cid.written = true
-	return nil
-}
-
-func newCIDFile(path string) (*cidFile, error) {
-	if _, err := os.Stat(path); err == nil {
-		return nil, fmt.Errorf("Container ID file found, make sure the other container isn't running or delete %s", path)
-	}
-
-	f, err := os.Create(path)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to create the container ID file: %s", err)
-	}
-
-	return &cidFile{path: path, file: f}, nil
-}
-
 func createContainer(ctx context.Context, dockerCli *command.DockerCli, config *container.Config, hostConfig *container.HostConfig, networkingConfig *networktypes.NetworkingConfig, name string) (*types.ContainerCreateResponse, error) {
 	stderr := dockerCli.Err()
-
-	var containerIDFile *cidFile
-	if hostConfig.ContainerIDFile != "" {
-		var err error
-		if containerIDFile, err = newCIDFile(hostConfig.ContainerIDFile); err != nil {
-			return nil, err
-		}
-		defer containerIDFile.Close()
-	}
 
 	var trustedRef reference.Canonical
 	_, ref, err := reference.ParseIDOrReference(config.Image)
@@ -209,10 +161,6 @@ func createContainer(ctx context.Context, dockerCli *command.DockerCli, config *
 	for _, warning := range response.Warnings {
 		fmt.Fprintf(stderr, "WARNING: %s\n", warning)
 	}
-	if containerIDFile != nil {
-		if err = containerIDFile.Write(response.ID); err != nil {
-			return nil, err
-		}
-	}
+
 	return &response, nil
 }
