@@ -140,7 +140,7 @@ func runRun(dockerCli *command.DockerCli, flags *pflag.FlagSet, opts *runOptions
 
 	ctx, cancelFun := context.WithCancel(context.Background())
 
-	createResponse, err := createContainer(ctx, dockerCli, config, hostConfig, networkingConfig, hostConfig.ContainerIDFile, opts.name)
+	createResponse, err := createContainer(ctx, dockerCli, config, hostConfig, networkingConfig, opts.name)
 	if err != nil {
 		reportError(stderr, cmdPath, err.Error(), true)
 		return runStartContainerErr(err)
